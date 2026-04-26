@@ -1,0 +1,6 @@
+apiVersion: v2
+name: auth-service
+description: Auth Service sub-chart for ShopMesh (JWT authentication, Node.js, port 3001)
+type: application
+version: 1.0.0
+appVersion: "1.0.0"

@@ -1,0 +1,39 @@
+apiVersion: v2
+name: shopmesh
+description: |
+  ShopMesh — production-grade umbrella Helm chart.
+  Manages auth-service, product-service, order-service, frontend,
+  mongodb (StatefulSet), and an optional Envoy Gateway API layer.
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+
+# Sub-charts (each lives under charts/)
+dependencies:
+  - name: auth-service
+    version: "1.0.0"
+    repository: "file://charts/auth-service"
+  - name: product-service
+    version: "1.0.0"
+    repository: "file://charts/product-service"
+  - name: order-service
+    version: "1.0.0"
+    repository: "file://charts/order-service"
+  - name: frontend
+    version: "1.0.0"
+    repository: "file://charts/frontend"
+  - name: mongodb
+    version: "1.0.0"
+    repository: "file://charts/mongodb"
+  - name: gateway
+    version: "1.0.0"
+    repository: "file://charts/gateway"
+
+maintainers:
+  - name: shopmesh-team
+    email: ops@shopmesh.example.com
+
+keywords:
+  - shopmesh
+  - microservices
+  - ecommerce

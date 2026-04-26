@@ -1,0 +1,19 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# charts/auth-service/templates/configmap.yaml
+# Non-sensitive runtime configuration — injected via envFrom in deployment
+# ──────────────────────────────────────────────────────────────────────────────
+{{- $vals := .Values }}
+{{- $global := .Values.global }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: auth-service-config
+  namespace: {{ $global.namespace }}
+  labels:
+    app.kubernetes.io/name: auth-service
+    app.kubernetes.io/part-of: {{ $global.partOf }}
+    app.kubernetes.io/component: backend
+data:
+  {{- range $key, $value := $vals.env }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}

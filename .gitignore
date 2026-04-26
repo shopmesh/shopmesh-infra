@@ -1,0 +1,4 @@
+.helmignore
+*.tar.gz
+*.tgz
+charts/*.tgz

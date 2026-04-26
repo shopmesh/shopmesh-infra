@@ -1,0 +1,101 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# charts/product-service/templates/networkpolicy.yaml
+#
+# Zero-trust NetworkPolicy for the product-service pod.
+#
+# INGRESS allowed:
+#   • From the Envoy Gateway data-plane namespace — Gateway routes
+#     /api/products/* to product-service:3002.
+#   • From within the same namespace (shopmesh) — covers intra-namespace calls
+#     (e.g. order-service calling product-service to validate product IDs).
+#
+# EGRESS allowed:
+#   • kube-dns / CoreDNS on TCP+UDP 53
+#   • mongodb on port 27017 — product-service stores product catalogue in
+#     MongoDB (MONGO_URI and MONGO_HOST are set in its Secret and ConfigMap)
+#
+# Everything else is denied by the default-deny policy below.
+# ──────────────────────────────────────────────────────────────────────────────
+
+{{- $global := .Values.global }}
+{{- $vals   := .Values }}
+
+# ── 1 of 2: Default-deny all ingress and egress for product-service pods ───────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: product-service-default-deny
+  namespace: {{ $global.namespace }}
+  labels:
+    app.kubernetes.io/name: product-service
+    app.kubernetes.io/part-of: {{ $global.partOf }}
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: product-service
+  policyTypes:
+    - Ingress
+    - Egress
+
+---
+# ── 2 of 2: Explicit allow policy for product-service ─────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: product-service-allow
+  namespace: {{ $global.namespace }}
+  labels:
+    app.kubernetes.io/name: product-service
+    app.kubernetes.io/part-of: {{ $global.partOf }}
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: product-service
+  policyTypes:
+    - Ingress
+    - Egress
+
+  ingress:
+    # ── Allow from Envoy Gateway data-plane (routes /api/products/* here) ────
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: envoy-gateway-system
+        # Cover gateway controller pods in any namespace labelled "gateway"
+        - namespaceSelector:
+            matchLabels:
+              app.kubernetes.io/component: gateway
+        # Allow from same namespace — handles intra-namespace backend calls
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $global.namespace }}
+      ports:
+        # product-service HTTP listener
+        - protocol: TCP
+          port: {{ $vals.port }}
+
+  egress:
+    # ── Allow DNS resolution ──────────────────────────────────────────────────
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+    # ── Allow egress to MongoDB (product-service stores catalogue data there) ─
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $global.namespace }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: mongodb
+      ports:
+        - protocol: TCP
+          port: 27017

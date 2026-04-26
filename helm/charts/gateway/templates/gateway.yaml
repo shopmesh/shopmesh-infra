@@ -1,0 +1,32 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# charts/gateway/templates/gateway.yaml
+#
+# Kubernetes Gateway API — Gateway resource.
+# Only rendered when global.gateway.enabled = true.
+#
+# Attaches a single HTTP listener on port 80 to the envoy-gateway-class.
+# ──────────────────────────────────────────────────────────────────────────────
+{{- if .Values.global.gateway.enabled }}
+#{{- $vals := .Values }}
+{{- $gw := .Values }}
+{{- $global := .Values.global }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: shopmesh-gateway
+  namespace: {{ $global.namespace }}
+  labels:
+    app.kubernetes.io/name: shopmesh-gateway
+    app.kubernetes.io/part-of: {{ $global.partOf }}
+    app.kubernetes.io/component: gateway
+spec:
+  gatewayClassName: {{ $gw.gatewayClassName }}
+  listeners:
+    - name: {{ $gw.listener.name }}
+      port: {{ $gw.listener.port }}
+      protocol: {{ $gw.listener.protocol }}
+      # Allow HTTPRoute resources from the same namespace to attach
+      allowedRoutes:
+        namespaces:
+          from: All
+{{- end }}

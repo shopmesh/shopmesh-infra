@@ -1,0 +1,144 @@
+# =============================================================================
+# helm-charts/environments/dev/values.yaml
+#
+# DEV environment overrides.
+# Merged on top of helm-charts/values.yaml by ArgoCD.
+# Branch: develop  |  Namespace: dev  |  Sync: auto
+#
+# CI updates ONLY the `tag:` fields below when a new image is built.
+# =============================================================================
+
+# ── Global ───────────────────────────────────────────────────────────────────
+global:
+  namespace: dev                   # ← ArgoCD deploys to this namespace
+  imagePullPolicy: Always
+  partOf: shopmesh
+  gateway:
+    enabled: true
+  ingress:
+    className: nginx
+    annotations:
+      nginx.ingress.kubernetes.io/use-regex: "true"
+
+# ── auth-service ─────────────────────────────────────────────────────────────
+auth-service:
+  image:
+    repository: priyatham753/auth-service
+    tag: "dev-latest"              # <-- CI updates this field
+
+  replicaCount: 1
+
+  env:
+    PORT: "3001"
+    NODE_ENV: "development"
+    JWT_EXPIRES_IN: "24h"
+    MONGO_HOST: "mongodb-0.mongodb-headless.dev.svc.cluster.local"
+    MONGO_PORT: "27017"
+    MONGO_DB: "authdb"
+
+  # Base64-encoded secrets for dev (non-production credentials)
+  secrets:
+    JWT_SECRET: c2hvcG1lc2gtZGV2LWp3dC1zZWNyZXQ=
+    # mongodb://admin:dev-password@mongodb-0.mongodb-headless.dev.svc.cluster.local:27017/authdb?authSource=admin
+    MONGO_URI: bW9uZ29kYjovL2FkbWluOmRldi1wYXNzd29yZEBtb25nb2RiLTAubW9uZ29kYi1oZWFkbGVzcy5kZXYuc3ZjLmNsdXN0ZXIubG9jYWw6MjcwMTcvYXV0aGRiP2F1dGhTb3VyY2U9YWRtaW4=
+
+# ── product-service ──────────────────────────────────────────────────────────
+product-service:
+  image:
+    repository: priyatham753/product-service
+    tag: "dev-latest"              # <-- CI updates this field
+
+  replicaCount: 1
+
+  env:
+    PORT: "3002"
+    NODE_ENV: "development"
+    AUTH_SERVICE_URL: "http://auth-service.dev.svc.cluster.local:3001"
+    MONGO_HOST: "mongodb-0.mongodb-headless.dev.svc.cluster.local"
+    MONGO_PORT: "27017"
+    MONGO_DB: "productdb"
+
+  secrets:
+    # mongodb://admin:dev-password@mongodb-0.mongodb-headless.dev.svc.cluster.local:27017/productdb?authSource=admin
+    MONGO_URI: bW9uZ29kYjovL2FkbWluOmRldi1wYXNzd29yZEBtb25nb2RiLTAubW9uZ29kYi1oZWFkbGVzcy5kZXYuc3ZjLmNsdXN0ZXIubG9jYWw6MjcwMTcvcHJvZHVjdGRiP2F1dGhTb3VyY2U9YWRtaW4=
+
+# ── order-service ────────────────────────────────────────────────────────────
+order-service:
+  image:
+    repository: priyatham753/order-service
+    tag: "dev-latest"              # <-- CI updates this field
+
+  replicaCount: 1
+
+  env:
+    PORT: "3003"
+    NODE_ENV: "development"
+    DB_NAME: "orderdb"
+    AUTH_SERVICE_URL: "http://auth-service.dev.svc.cluster.local:3001"
+    PRODUCT_SERVICE_URL: "http://product-service.dev.svc.cluster.local:3002"
+    MONGO_HOST: "mongodb-0.mongodb-headless.dev.svc.cluster.local"
+    MONGO_PORT: "27017"
+
+  secrets:
+    # mongodb://admin:dev-password@mongodb-0.mongodb-headless.dev.svc.cluster.local:27017
+    MONGO_URI: bW9uZ29kYjovL2FkbWluOmRldi1wYXNzd29yZEBtb25nb2RiLTAubW9uZ29kYi1oZWFkbGVzcy5kZXYuc3ZjLmNsdXN0ZXIubG9jYWw6MjcwMTc=
+
+# ── frontend ─────────────────────────────────────────────────────────────────
+frontend:
+  image:
+    repository: priyatham753/frontend
+    tag: "dev-latest"              # <-- CI updates this field
+
+  replicaCount: 1
+
+  env:
+    REACT_APP_AUTH_SERVICE_URL: "/api/auth"
+    REACT_APP_PRODUCT_SERVICE_URL: "/api/products"
+    REACT_APP_ORDER_SERVICE_URL: "/api/orders"
+    NGINX_PORT: "80"
+
+# ── mongodb ──────────────────────────────────────────────────────────────────
+mongodb:
+  image:
+    repository: mongo
+    tag: "7.0"
+
+  replicaCount: 1
+  port: 27017
+
+  storage:
+    storageClassName: nfs-storage-dev
+    size: 5Gi                      # smaller volume in dev
+    accessMode: ReadWriteMany
+
+  nfs:
+    server: "172.31.24.10"         # ← Replace with your NFS server IP
+    path: "/exports/mongodb-dev"   # dev-specific NFS export path
+
+  secrets:
+    MONGO_ROOT_USERNAME: YWRtaW4=                            # admin
+    MONGO_ROOT_PASSWORD: ZGV2LXBhc3N3b3Jk                   # dev-password
+    AUTH_MONGO_URI: bW9uZ29kYjovL2FkbWluOmRldi1wYXNzd29yZEBtb25nb2RiLTAubW9uZ29kYi1oZWFkbGVzcy5kZXYuc3ZjLmNsdXN0ZXIubG9jYWw6MjcwMTcvYXV0aGRiP2F1dGhTb3VyY2U9YWRtaW4=
+    PRODUCT_MONGO_URI: bW9uZ29kYjovL2FkbWluOmRldi1wYXNzd29yZEBtb25nb2RiLTAubW9uZ29kYi1oZWFkbGVzcy5kZXYuc3ZjLmNsdXN0ZXIubG9jYWw6MjcwMTcvcHJvZHVjdGRiP2F1dGhTb3VyY2U9YWRtaW4=
+    ORDER_MONGO_URI: bW9uZ29kYjovL2FkbWluOmRldi1wYXNzd29yZEBtb25nb2RiLTAubW9uZ29kYi1oZWFkbGVzcy5kZXYuc3ZjLmNsdXN0ZXIubG9jYWw6MjcwMTc=
+
+# ── gateway ──────────────────────────────────────────────────────────────────
+gateway:
+  gatewayClassName: envoy-gateway-class
+  listener:
+    name: http
+    port: 80
+    protocol: HTTP
+  routes:
+    - path: /api/auth
+      serviceName: auth-service
+      servicePort: 3001
+    - path: /api/products
+      serviceName: product-service
+      servicePort: 3002
+    - path: /api/orders
+      serviceName: order-service
+      servicePort: 3003
+    - path: /
+      serviceName: frontend
+      servicePort: 80

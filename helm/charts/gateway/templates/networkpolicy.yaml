@@ -1,0 +1,54 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# charts/gateway/templates/networkpolicy.yaml
+#
+# NetworkPolicy for the Gateway chart.
+#
+# IMPORTANT: The gateway chart in this project uses the Kubernetes Gateway API
+# (GatewayClass / Gateway / HTTPRoute), NOT a pod-based proxy deployment.
+# The actual Envoy data-plane proxy pods are created by the Envoy Gateway
+# controller in its own namespace (typically "envoy-gateway-system"), NOT in
+# the shopmesh namespace.
+#
+# Therefore this file creates a NAMESPACE-SCOPED default-deny policy that
+# covers any pod in the shopmesh namespace that does NOT already have a
+# more-specific NetworkPolicy. It acts as a safety net.
+#
+# In addition, it labels the envoy-gateway-system namespace (via a comment
+# reminder — you must run `kubectl label ns envoy-gateway-system ...` before
+# deploying) so the service-specific allow rules can reference it.
+#
+# If in the future a proxy/gateway pod IS added to the shopmesh namespace,
+# add an explicit allow policy here following the pattern in the other charts.
+# ──────────────────────────────────────────────────────────────────────────────
+
+{{- $global := .Values.global }}
+
+# ── Namespace-level default-deny (catch-all for any unlabelled pod) ───────────
+# podSelector: {} (empty) matches ALL pods in the namespace.
+# This is a defence-in-depth measure — each service chart already has its own
+# default-deny, but this catch-all handles any pod that might be created
+# without its own policy (e.g. debug containers, future additions).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: {{ $global.namespace }}
+  labels:
+    app.kubernetes.io/part-of: {{ $global.partOf }}
+    app.kubernetes.io/component: network-policy
+    # Identifies this as the namespace-level catch-all policy
+    shopmesh.io/policy-type: namespace-default-deny
+spec:
+  # Empty podSelector = applies to ALL pods in this namespace
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+  # No ingress or egress rules = deny all traffic for pods not covered
+  # by a more-specific policy.
+  #
+  # NOTE: Kubernetes applies the UNION of all matching NetworkPolicies.
+  # A pod matched by BOTH this policy AND a more-specific allow policy
+  # will have the allow rules take effect — the deny here does not
+  # override the explicit allows in the per-service policies.
+  # This policy only blocks pods that have NO other matching policy.

@@ -1,0 +1,32 @@
+# =============================================================================
+# App of Apps Bootstrap
+# Apply this ONCE to kick-start the entire GitOps workflow:
+#   kubectl apply -f argocd/bootstrap/app-of-apps.yaml
+#
+# ArgoCD will then automatically create dev.yaml and prod.yaml Applications.
+# =============================================================================
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: shopmesh-app-of-apps
+  namespace: argocd
+  # Cascade-delete all child Applications when this is deleted
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/shopmesh/shopmesh-infra.git
+    targetRevision: main
+    path: argocd/applications
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

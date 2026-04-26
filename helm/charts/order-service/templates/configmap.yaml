@@ -1,0 +1,18 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# charts/order-service/templates/configmap.yaml
+# ──────────────────────────────────────────────────────────────────────────────
+{{- $vals := .Values }}
+{{- $global := .Values.global }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: order-service-config
+  namespace: {{ $global.namespace }}
+  labels:
+    app.kubernetes.io/name: order-service
+    app.kubernetes.io/part-of: {{ $global.partOf }}
+    app.kubernetes.io/component: backend
+data:
+  {{- range $key, $value := $vals.env }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}

@@ -1,0 +1,433 @@
+================================================================================
+  SHOPMESH — COMPLETE CHANGES DOCUMENT (all.txt)
+  What was built, changed, and why — across the entire session
+================================================================================
+
+================================================================================
+  PART 1 — SHOPMESH-INFRA REPOSITORY (GitOps Control Plane)
+================================================================================
+
+WHAT IT IS:
+  A single GitHub repository (shopmesh/shopmesh-infra) that is the
+  "single source of truth" for deploying the entire ShopMesh platform.
+  ArgoCD watches this repo and keeps the Kubernetes cluster in sync.
+
+FINAL FOLDER STRUCTURE:
+  shopmesh-infra/
+  ├── .gitignore
+  ├── README.md                          ← full operations guide
+  ├── setup.txt                          ← beginner deployment guide
+  ├── helm/                              ← Helm umbrella chart (moved from helm-charts/)
+  │   ├── Chart.yaml
+  │   ├── values.yaml                    ← base defaults (shared)
+  │   ├── environments/
+  │   │   ├── dev/values.yaml            ← dev overrides + image tags (CI writes here)
+  │   │   └── prod/values.yaml           ← prod overrides + image tags (CI writes here)
+  │   └── charts/
+  │       ├── auth-service/              ← Deployment, Service, ConfigMap, Secret, NetworkPolicy
+  │       ├── product-service/           ← Deployment, Service, ConfigMap, Secret, NetworkPolicy
+  │       ├── order-service/             ← Deployment, Service, ConfigMap, Secret, NetworkPolicy
+  │       ├── frontend/                  ← Deployment, Service, ConfigMap, NetworkPolicy
+  │       ├── mongodb/                   ← StatefulSet, Services, Secret, PVC, NetworkPolicy
+  │       └── gateway/                   ← GatewayClass, Gateway, HTTPRoute, NetworkPolicy
+  └── argocd/
+      ├── bootstrap/
+      │   └── app-of-apps.yaml
+      ├── projects/
+      │   ├── dev-project.yaml
+      │   └── prod-project.yaml
+      ├── applications/
+      │   ├── dev.yaml
+      │   └── prod.yaml
+      └── secrets/
+          └── README.md
+
+--------------------------------------------------------------------------------
+  REPO EVOLUTION — 3 PHASES
+--------------------------------------------------------------------------------
+
+PHASE 1 — Initial creation (separate helm/ generated from scratch)
+  Problem:  A new helm/ directory was generated inside shopmesh-infra,
+            duplicating the existing helm-charts/ repository.
+  What was wrong: helm-charts/ already had production-grade templates
+            with NetworkPolicies, StatefulSets, Secrets, ConfigMaps,
+            NFS storage, Envoy Gateway API — all ignored.
+
+PHASE 2 — Switched to two-repo architecture
+  shopmesh-infra → ArgoCD manifests only
+  helm-charts    → Helm chart (separate repo)
+  ArgoCD Applications pointed at helm-charts repo.
+  Problem: Two repos to manage, two PATs needed, more complex.
+
+PHASE 3 — Merged into single repo (current final state)
+  helm-charts/ content moved into shopmesh-infra/helm/
+  ArgoCD Applications updated to point back at shopmesh-infra.
+  Single repo = single source of truth. Cleaner GitOps.
+
+================================================================================
+  PART 2 — ARGOCD CHANGES (Detail)
+================================================================================
+
+────────────────────────────────────────────────────────────────────────────────
+FILE: argocd/bootstrap/app-of-apps.yaml
+────────────────────────────────────────────────────────────────────────────────
+
+WHAT IT DOES:
+  This is the ONLY file you ever apply manually with kubectl.
+  It creates a single ArgoCD Application called "shopmesh-app-of-apps"
+  that watches the argocd/applications/ folder in this very repo.
+  ArgoCD reads that folder and automatically creates dev and prod Applications.
+
+KEY SETTINGS:
+  repoURL:         https://github.com/shopmesh/shopmesh-infra.git
+  targetRevision:  main
+  path:            argocd/applications
+  syncPolicy:      automated (prune + selfHeal)
+
+HOW TO USE:
+  kubectl apply -f argocd/bootstrap/app-of-apps.yaml
+  (Run once. ArgoCD takes over everything after this.)
+
+────────────────────────────────────────────────────────────────────────────────
+FILE: argocd/applications/dev.yaml
+────────────────────────────────────────────────────────────────────────────────
+
+CHANGES MADE (3 rounds of updates):
+  Round 1: Created pointing at shopmesh-infra, path: helm/
+  Round 2: Changed to point at helm-charts repo (two-repo phase)
+  Round 3: Changed back to shopmesh-infra, path: helm/ (single-repo final)
+
+FINAL STATE:
+  repoURL:         https://github.com/shopmesh/shopmesh-infra.git
+  targetRevision:  develop          ← watches the DEVELOP branch
+  path:            helm             ← chart root inside the repo
+  releaseName:     shopmesh
+  valueFiles:
+    - values.yaml                   ← base defaults
+    - environments/dev/values.yaml  ← dev overrides (CI writes image tags here)
+  destination:
+    namespace:     dev              ← deploys to the "dev" namespace
+  syncPolicy:
+    automated:
+      prune:     true               ← deletes resources removed from Git
+      selfHeal:  true               ← reverts any manual kubectl changes
+    syncOptions:
+      - CreateNamespace=true        ← auto-creates "dev" namespace
+      - ServerSideApply=true
+
+WHY AUTO-SYNC ON DEV:
+  Developer pushes code → CI builds image → CI updates develop branch tag
+  → ArgoCD detects change within 3 minutes → auto-deploys to dev namespace.
+  Zero human intervention needed for dev deployments.
+
+────────────────────────────────────────────────────────────────────────────────
+FILE: argocd/applications/prod.yaml
+────────────────────────────────────────────────────────────────────────────────
+
+FINAL STATE:
+  repoURL:         https://github.com/shopmesh/shopmesh-infra.git
+  targetRevision:  main             ← watches the MAIN branch
+  path:            helm
+  releaseName:     shopmesh
+  valueFiles:
+    - values.yaml
+    - environments/prod/values.yaml ← prod overrides (CI writes image tags here)
+  destination:
+    namespace:     prod
+  syncPolicy:
+    syncOptions:                    ← NO "automated:" block = manual sync only
+      - CreateNamespace=true
+      - ServerSideApply=true
+
+WHY MANUAL SYNC ON PROD:
+  CI pushes new tag to main branch → ArgoCD shows "OutOfSync" in UI
+  → Operator reviews the diff → clicks SYNC to approve → deploys to prod.
+  Human approval gate before every production release.
+
+────────────────────────────────────────────────────────────────────────────────
+FILE: argocd/projects/dev-project.yaml
+────────────────────────────────────────────────────────────────────────────────
+
+WHAT IT IS:
+  An ArgoCD AppProject is a security boundary. It defines:
+    - Which repos ArgoCD can read from
+    - Which namespaces ArgoCD can deploy to
+    - Which Kubernetes resource types are allowed
+
+CHANGES MADE:
+  Initial version: only allowed shopmesh-infra repo, missing many resource types
+  Phase 2 update:  added helm-charts repo as second sourceRepo
+  Phase 3 update:  removed helm-charts repo (back to single repo)
+  Final fix:       expanded resource whitelists to cover ALL types the chart uses
+
+FINAL sourceRepos:
+  - https://github.com/shopmesh/shopmesh-infra.git   (only one needed now)
+
+FINAL destinations:
+  - namespace: dev    (workloads land here)
+  - namespace: argocd (needed for App of Apps to create child Applications)
+
+FINAL clusterResourceWhitelist (cluster-wide resources):
+  - Namespace
+  - StorageClass     ← NFS StorageClass created by mongodb chart
+  - PersistentVolume ← NFS PV created by mongodb pvc.yaml
+  - GatewayClass     ← Envoy Gateway API resource
+  - Application      ← ArgoCD Application (for App of Apps pattern)
+
+FINAL namespaceResourceWhitelist (namespace-scoped resources):
+  - Deployment, StatefulSet
+  - Service, ConfigMap, Secret, ServiceAccount
+  - PersistentVolumeClaim
+  - NetworkPolicy    ← added (chart has NetworkPolicies for zero-trust)
+  - Ingress          ← added (gateway chart has Ingress fallback)
+  - Gateway          ← added (Envoy Gateway API)
+  - HTTPRoute        ← added (Envoy Gateway API routing rules)
+
+WHY THIS MATTERS:
+  Without the correct whitelist entries, ArgoCD refuses to create those
+  resources and the sync fails with "resource not permitted" errors.
+
+────────────────────────────────────────────────────────────────────────────────
+FILE: argocd/projects/prod-project.yaml
+────────────────────────────────────────────────────────────────────────────────
+
+  Identical structure to dev-project.yaml.
+  Destination namespace: prod instead of dev.
+  No automation — all syncs are manual.
+
+────────────────────────────────────────────────────────────────────────────────
+FILE: argocd/secrets/README.md
+────────────────────────────────────────────────────────────────────────────────
+
+CONTENTS:
+  1. How to register shopmesh-infra repo with ArgoCD (only one repo needed)
+  2. How to update NFS server IP and path before deploying
+  3. How to re-encode real credentials (base64) for production secrets
+  4. How CI updates image tags (yq command pattern)
+  5. Optional GHCR image pull secret setup
+  6. Links to Sealed Secrets / External Secrets for production-grade secret mgmt
+
+================================================================================
+  PART 3 — HELM CHART (shopmesh-infra/helm/)
+================================================================================
+
+SOURCE: Moved from standalone helm-charts/ repository (existing, untouched)
+WHAT WAS ADDED: Two new environment values files
+
+────────────────────────────────────────────────────────────────────────────────
+FILE: helm/environments/dev/values.yaml  (NEW)
+────────────────────────────────────────────────────────────────────────────────
+
+PURPOSE:
+  Overrides base values.yaml for the dev environment.
+  CI writes ONLY the image tag fields when a new image is built.
+
+KEY OVERRIDES vs base:
+  global.namespace:     dev           (templates use this for resource namespace)
+  replicaCount:         1             (save resources in dev)
+  mongodb.storage.size: 5Gi           (smaller than prod)
+  mongodb.nfs.path:     /exports/mongodb-dev
+  Service DNS names:    *.dev.svc.cluster.local
+  image.tag:            dev-latest    (CI replaces this with develop-<sha>)
+
+────────────────────────────────────────────────────────────────────────────────
+FILE: helm/environments/prod/values.yaml  (NEW)
+────────────────────────────────────────────────────────────────────────────────
+
+KEY OVERRIDES vs base:
+  global.namespace:     prod
+  replicaCount:         2             (HA in production)
+  mongodb.storage.size: 50Gi
+  mongodb.nfs.path:     /exports/mongodb
+  Service DNS names:    *.prod.svc.cluster.local
+  resources:            higher CPU/memory limits
+  image.tag:            v1.0.0        (CI replaces with semver tag)
+
+WHY global.namespace MATTERS:
+  Every template in the chart has: namespace: {{ $global.namespace }}
+  This is how the same templates produce different namespaces per environment.
+  The ArgoCD destination.namespace also matches — they must be identical.
+
+================================================================================
+  PART 4 — CI WORKFLOWS CHANGED
+================================================================================
+
+────────────────────────────────────────────────────────────────────────────────
+SHARED: shared-workflows-template/.github/workflows/push.yaml
+────────────────────────────────────────────────────────────────────────────────
+
+WHAT CHANGED:
+  1. Fixed unstable image detection
+     BEFORE: docker images | grep service_name | head -n1  (could match wrong image)
+     AFTER:  use exact image reference built in build-image job
+
+  2. ADDED update-infra job (most critical addition)
+     This is what CLOSES THE GITOPS LOOP.
+     After pushing the image to GHCR, this job:
+       a. Clones shopmesh-infra repo using INFRA_PAT secret
+       b. Checks out the correct branch (develop→dev, main→prod)
+       c. Runs yq to update the image tag in the correct values file
+       d. Commits and pushes "[skip ci]" commit to infra repo
+       e. ArgoCD detects the new commit and syncs the cluster
+
+     Branch mapping:
+       develop branch push → updates helm/environments/dev/values.yaml
+       main branch push    → updates helm/environments/prod/values.yaml
+
+  3. Removed 80 lines of dead commented-out Docker Hub code
+
+REQUIRED NEW SECRET:
+  INFRA_PAT — GitHub PAT with contents:write on shopmesh-infra
+  Add to each service repo: Settings → Secrets → Actions → New secret
+
+────────────────────────────────────────────────────────────────────────────────
+SHARED: shared-workflows-template/.github/workflows/generate-tag-and-build-image-trivy.yaml
+────────────────────────────────────────────────────────────────────────────────
+
+WHAT CHANGED:
+  1. Tag strategy — BEFORE: v<unix-timestamp> (meaningless)
+     AFTER: semver via mathieudutour/github-tag-action@v6.2
+       main    → v1.2.3 (based on conventional commits)
+       develop → develop-a1b2c3d4 (branch + short sha)
+
+  2. Added Docker Buildx setup for better build performance
+
+  3. Pinned trivy-action from @master to @0.20.0
+     Prevents supply-chain attacks and silent breaking changes
+
+  4. Added retention-days: 1 on Docker image artifact
+     Prevents storage quota exhaustion (was 90-day default)
+
+  5. Removed 180 lines of dead commented-out Docker Hub code
+
+────────────────────────────────────────────────────────────────────────────────
+SHARED: shared-workflows-template/.github/workflows/validation-ci.yaml
+────────────────────────────────────────────────────────────────────────────────
+
+WHAT CHANGED:
+  1. Added test job (was completely missing)
+     Node:   npm ci + npm test --coverage (lcov output)
+     Python: pip install + pytest --cov (xml output)
+     Coverage uploaded as artifact for SonarQube to consume
+
+  2. npm install → npm ci
+     npm ci uses package-lock.json exactly = reproducible builds
+
+  3. Snyk no longer blocked by SonarQube
+     BEFORE: needs: sonarqube  (Snyk skipped if SonarQube failed)
+     AFTER:  needs: test       (SonarQube and Snyk run in parallel)
+
+  4. Added dependency caching (npm cache, pip cache) for faster runs
+
+  5. Pinned snyk/actions/setup from @master to specific commit SHA
+     Supply-chain safety
+
+  6. SonarQube now receives coverage report paths from the test job
+
+────────────────────────────────────────────────────────────────────────────────
+SERVICE CI FILES — auth-service, product-service, order-service
+────────────────────────────────────────────────────────────────────────────────
+
+WHAT CHANGED (same for all three):
+  1. Added paths: filters — CI only runs when relevant files change
+     README edits no longer trigger a full Docker build + Trivy scan
+
+  2. Added workflow_dispatch — manual trigger from GitHub UI is now possible
+
+  3. run_trivy: changed from  ${{ github.event_name == 'pull_request' }}
+                          to  true
+     Trivy now always runs, including on direct push to main
+
+────────────────────────────────────────────────────────────────────────────────
+FRONTEND — frontend/.github/workflows/ci.yaml  (NEW — did not exist before)
+────────────────────────────────────────────────────────────────────────────────
+
+WHY ADDED:
+  The frontend Dockerfile existed and built a React app with nginx.
+  But there was no CI workflow, so:
+    - No image was ever built
+    - No image was ever pushed to GHCR
+    - The Helm chart referenced frontend:latest but that tag never existed
+    - ArgoCD would deploy a chart that could never pull the frontend image
+
+WHAT IT DOES:
+  Same 3-job pattern as other services:
+    validation → build → push (+ update-infra)
+  runtime: node
+  paths filter: src/**, public/**, Dockerfile, package.json, nginx.conf
+
+================================================================================
+  PART 5 — HOW CI AND ARGOCD CONNECT (The Complete Loop)
+================================================================================
+
+STEP 1: Developer pushes code to auth-service develop branch
+STEP 2: GitHub Actions triggers auth-service-ci workflow
+STEP 3: validation job — tests pass, SonarQube + Snyk scan clean
+STEP 4: build job — Docker image built, tagged "develop-a1b2c3d4"
+         image saved as artifact
+STEP 5: push job — image pushed to ghcr.io/shopmesh/auth-service:develop-a1b2c3d4
+STEP 6: update-infra job (NEW) —
+         clones shopmesh-infra, checks out develop branch,
+         runs: yq e ".auth-service.image.tag = \"develop-a1b2c3d4\""
+                   -i helm/environments/dev/values.yaml
+         commits: "ci: update auth-service image to develop-a1b2c3d4 [skip ci]"
+         pushes to develop branch of shopmesh-infra
+STEP 7: ArgoCD polls shopmesh-infra every 3 minutes
+         detects the new commit on develop branch
+         sees helm/environments/dev/values.yaml changed
+STEP 8: ArgoCD auto-syncs shopmesh-dev Application
+         renders Helm chart with new tag
+         applies updated Deployment to Kubernetes namespace "dev"
+STEP 9: Kubernetes rolling update — new pod comes up, old pod terminates
+         zero downtime
+
+FOR PROD (main branch):
+  Same flow but:
+    - Tag is semver: v1.2.3
+    - Values file: helm/environments/prod/values.yaml
+    - Branch: main
+    - ArgoCD shows OutOfSync but does NOT auto-sync
+    - Operator clicks SYNC in ArgoCD UI to approve production release
+
+================================================================================
+  PART 6 — REQUIRED SECRETS (GitHub)
+================================================================================
+
+Add these to EACH service repo (Settings → Secrets → Actions):
+
+  Secret Name     | Value                              | Used By
+  ----------------|------------------------------------|------------------
+  INFRA_PAT       | GitHub PAT, contents:write on      | update-infra job
+                  | shopmesh/shopmesh-infra repo       |
+  SNYK_TOKEN      | From snyk.io account               | validation-ci
+  SONAR_TOKEN     | From SonarQube server              | validation-ci
+  SONAR_HOST_URL  | https://your-sonar-server.com      | validation-ci
+
+================================================================================
+  PART 7 — FILES SUMMARY TABLE
+================================================================================
+
+  File                                               | Status    | Change
+  ----------------------------------------------------|-----------|-------------------------
+  shopmesh-infra/argocd/bootstrap/app-of-apps.yaml   | CREATED   | Bootstrap entrypoint
+  shopmesh-infra/argocd/applications/dev.yaml        | CREATED   | Dev ArgoCD Application
+  shopmesh-infra/argocd/applications/prod.yaml       | CREATED   | Prod ArgoCD Application
+  shopmesh-infra/argocd/projects/dev-project.yaml    | CREATED   | Dev AppProject + security
+  shopmesh-infra/argocd/projects/prod-project.yaml   | CREATED   | Prod AppProject + security
+  shopmesh-infra/argocd/secrets/README.md            | CREATED   | Secrets + NFS + CI guide
+  shopmesh-infra/helm/                               | MOVED IN  | From standalone helm-charts/
+  shopmesh-infra/helm/environments/dev/values.yaml   | CREATED   | Dev env overrides
+  shopmesh-infra/helm/environments/prod/values.yaml  | CREATED   | Prod env overrides
+  shopmesh-infra/README.md                           | CREATED   | Full operations guide
+  shopmesh-infra/setup.txt                           | CREATED   | Beginner deploy guide
+  shared-workflows-template/.../push.yaml            | UPDATED   | Added update-infra job
+  shared-workflows-template/.../generate-tag-*.yaml  | UPDATED   | Semver tags, pinned Trivy
+  shared-workflows-template/.../validation-ci.yaml   | UPDATED   | Tests, npm ci, parallel Snyk
+  auth-service/.github/workflows/ci.yaml             | UPDATED   | Paths filter, always Trivy
+  product-service/.github/workflows/ci.yaml          | UPDATED   | Paths filter, always Trivy
+  order-service/.github/workflows/ci.yaml            | UPDATED   | Paths filter, always Trivy
+  frontend/.github/workflows/ci.yaml                 | CREATED   | Was completely missing
+
+================================================================================
+  END OF all.txt
+================================================================================

@@ -1,0 +1,847 @@
+================================================================================
+  SHOPMESH — COMPLETE SETUP & OPERATIONS GUIDE
+  From ArgoCD Installation to Production Deployment
+================================================================================
+
+Prerequisites (already done):
+  - Kubernetes cluster is running
+  - kubectl is configured and working
+  - shopmesh-infra GitHub repository exists with Helm chart and ArgoCD config
+
+================================================================================
+  SECTION 1 — WHAT IS ARGOCD?
+================================================================================
+
+ArgoCD is a tool that watches your GitHub repository and automatically keeps
+your Kubernetes cluster in sync with whatever is in Git.
+
+Think of it like this:
+  - Your GitHub repo = the "blueprint" of what should be running
+  - ArgoCD         = the builder that reads the blueprint and makes it real
+  - Kubernetes     = where everything actually runs
+
+Whenever you push a change to GitHub (like a new Docker image tag), ArgoCD
+sees the change and updates your cluster automatically — no manual kubectl
+commands needed. This is called GitOps.
+
+================================================================================
+  SECTION 2 — INSTALL ARGOCD
+================================================================================
+
+Step 1: Create a dedicated namespace for ArgoCD
+
+  kubectl create namespace argocd
+
+Step 2: Install ArgoCD using the official manifest
+
+  kubectl apply -n argocd \
+    -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+
+  This downloads and installs all ArgoCD components into the argocd namespace.
+  It may take 1–2 minutes to complete.
+
+Step 3: Verify that ArgoCD is running
+
+  kubectl get pods -n argocd
+
+  Wait until all pods show STATUS = Running. You should see pods like:
+    argocd-server-xxxxx               1/1   Running
+    argocd-application-controller-xx  1/1   Running
+    argocd-repo-server-xxxxx          1/1   Running
+    argocd-dex-server-xxxxx           1/1   Running
+    argocd-redis-xxxxx                1/1   Running
+
+  If pods are still in Pending or ContainerCreating, wait another 30 seconds
+  and run the command again.
+
+================================================================================
+  SECTION 3 — ACCESS THE ARGOCD UI
+================================================================================
+
+ArgoCD has a web interface (UI) where you can see your applications,
+trigger syncs, and debug issues.
+
+Step 1: Forward the ArgoCD server port to your local machine
+
+  kubectl port-forward svc/argocd-server -n argocd 8080:443
+
+  Leave this terminal open. Open a new terminal for all other commands.
+
+Step 2: Open the UI in your browser
+
+  URL: https://localhost:8080
+
+  Your browser may show a security warning ("Your connection is not private").
+  This is normal for a self-signed certificate. Click "Advanced" and then
+  "Proceed to localhost (unsafe)" to continue.
+
+Step 3: Get the initial admin password
+
+  Run this command in a NEW terminal (not the one running port-forward):
+
+  kubectl -n argocd get secret argocd-initial-admin-secret \
+    -o jsonpath="{.data.password}" | base64 -d; echo
+
+  This prints a long random string — that is your password.
+  Copy it carefully (no spaces).
+
+Step 4: Log in to the UI
+
+  Username: admin
+  Password: (the string from Step 3)
+
+  Click "SIGN IN".
+
+Step 5: (Recommended) Change the admin password
+
+  In the UI: click "admin" in the top-right corner → "Update Password"
+  Choose a password you will remember.
+
+  Or via CLI:
+    argocd login localhost:8080 --username admin --password <OLD_PASSWORD> --insecure
+    argocd account update-password
+
+================================================================================
+  SECTION 4 — INSTALL THE ARGOCD CLI (Optional but Recommended)
+================================================================================
+
+The ArgoCD CLI lets you run commands from the terminal instead of clicking
+through the UI. Some steps below show both UI and CLI options.
+
+Linux/macOS:
+  curl -sSL -o argocd \
+    https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+  chmod +x argocd
+  sudo mv argocd /usr/local/bin/
+
+Windows (PowerShell):
+  $version = (Invoke-RestMethod https://api.github.com/repos/argoproj/argo-cd/releases/latest).tag_name
+  Invoke-WebRequest -Uri "https://github.com/argoproj/argo-cd/releases/download/$version/argocd-windows-amd64.exe" -OutFile "argocd.exe"
+
+Log in with the CLI:
+  argocd login localhost:8080 --username admin --password <YOUR_PASSWORD> --insecure
+
+================================================================================
+  SECTION 5 — CONNECT GITHUB REPO TO ARGOCD
+================================================================================
+
+ArgoCD needs to read your shopmesh-infra GitHub repository.
+You must tell ArgoCD where it is and how to access it.
+
+----- Option A: Public Repository -----
+
+If your repository is public, ArgoCD can read it without credentials:
+
+  argocd repo add https://github.com/shopmesh/shopmesh-infra.git
+
+----- Option B: Private Repository (HTTPS with Personal Access Token) -----
+
+If your repository is private, you need a GitHub Personal Access Token (PAT):
+
+  How to create a GitHub PAT:
+    1. Go to GitHub → Settings → Developer Settings → Personal Access Tokens
+    2. Click "Generate new token (classic)"
+    3. Give it a name like "argocd-shopmesh"
+    4. Check the "repo" scope (read access to repositories)
+    5. Click "Generate token" and copy the token
+
+  Add the repo with credentials:
+    argocd repo add https://github.com/shopmesh/shopmesh-infra.git \
+      --username YOUR_GITHUB_USERNAME \
+      --password YOUR_GITHUB_PAT
+
+----- Option C: Private Repository (SSH Key) -----
+
+  argocd repo add git@github.com:shopmesh/shopmesh-infra.git \
+    --ssh-private-key-path ~/.ssh/id_rsa
+
+Verify the repo was added successfully:
+  argocd repo list
+
+  You should see your repo with STATUS = Successful.
+
+--------------------------------------------------------------------------------
+  BEFORE CONTINUING — Configure NFS for MongoDB
+--------------------------------------------------------------------------------
+
+The MongoDB chart uses NFS storage. Before running any ArgoCD sync,
+update the NFS server details in BOTH environment files:
+
+  File 1: helm/environments/dev/values.yaml
+  File 2: helm/environments/prod/values.yaml
+
+  Find this section in each file and fill in your actual values:
+
+    mongodb:
+      nfs:
+        server: "YOUR_NFS_SERVER_IP"    # example: "192.168.1.100"
+        path: "/exports/mongodb-dev"    # dev path (change for prod)
+
+  Commit and push these changes to your repository before continuing:
+
+    git add helm/environments/
+    git commit -m "config: set NFS server IP for MongoDB"
+    git push origin develop
+    git push origin main
+
+================================================================================
+  SECTION 6 — APPLY ARGOCD PROJECTS
+================================================================================
+
+AppProjects are ArgoCD security boundaries that define:
+  - Which Git repos an application can use
+  - Which namespaces it can deploy to
+  - Which Kubernetes resource types it can create
+
+Apply the projects BEFORE bootstrapping:
+
+  kubectl apply -f argocd/projects/dev-project.yaml
+  kubectl apply -f argocd/projects/prod-project.yaml
+
+Verify:
+  kubectl get appprojects -n argocd
+
+  You should see:
+    NAME            AGE
+    shopmesh-dev    5s
+    shopmesh-prod   5s
+
+================================================================================
+  SECTION 7 — BOOTSTRAP WITH APP OF APPS
+================================================================================
+
+----- What is "App of Apps"? -----
+
+ArgoCD manages "Applications". Normally you would have to create each one
+manually. "App of Apps" is a pattern where ONE ArgoCD Application manages
+all the OTHER Applications automatically.
+
+In our case:
+  - shopmesh-app-of-apps  → watches argocd/applications/ folder in Git
+    ├── sees dev.yaml     → creates the "shopmesh-dev" Application
+    └── sees prod.yaml    → creates the "shopmesh-prod" Application
+
+You only need to apply ONE file manually. Everything else is automatic.
+
+----- Apply the Bootstrap -----
+
+  kubectl apply -f argocd/bootstrap/app-of-apps.yaml
+
+----- What Happens Next -----
+
+  1. ArgoCD creates an Application called "shopmesh-app-of-apps"
+  2. That application scans the argocd/applications/ folder in your repo
+  3. It finds dev.yaml and prod.yaml
+  4. It automatically creates two more Applications:
+       - shopmesh-dev  (watches the "develop" branch)
+       - shopmesh-prod (watches the "main" branch)
+  5. shopmesh-dev starts syncing immediately (auto-sync is ON)
+  6. shopmesh-prod shows as OutOfSync and waits for manual approval
+
+----- Verify in the UI -----
+
+  Open https://localhost:8080
+
+  You should see three applications appear within 1–2 minutes:
+    - shopmesh-app-of-apps  → Synced / Healthy
+    - shopmesh-dev          → Synced / Healthy   (or Progressing)
+    - shopmesh-prod         → OutOfSync / Unknown (waiting for manual sync)
+
+  Or check via CLI:
+    argocd app list
+
+================================================================================
+  SECTION 8 — HOW THE HELM CHART WORKS
+================================================================================
+
+----- Umbrella Chart Concept -----
+
+An "umbrella chart" is a single Helm chart that contains multiple smaller
+charts (called subcharts) inside it.
+
+Our umbrella chart (helm/) contains these subcharts:
+  helm/charts/
+  ├── auth-service/      → the authentication microservice
+  ├── product-service/   → the product catalog microservice
+  ├── order-service/     → the order management microservice
+  ├── frontend/          → the React frontend application
+  ├── mongodb/           → the database (StatefulSet with NFS storage)
+  └── gateway/           → the API gateway (Envoy Gateway API)
+
+When ArgoCD syncs, it runs ONE Helm install that deploys ALL services at once.
+
+----- How Values Files Work -----
+
+Helm uses "values files" to configure what gets deployed.
+We have three values files:
+
+  1. helm/values.yaml
+     ─ The BASE file. Contains shared settings for all environments.
+     ─ Defines resource limits, probe settings, port numbers.
+     ─ You rarely change this file manually.
+
+  2. helm/environments/dev/values.yaml
+     ─ Overrides specific things for the DEV environment.
+     ─ Sets namespace to "dev"
+     ─ Sets replica count to 1 (saves resources)
+     ─ Sets MongoDB size to 5Gi
+     ─ Contains DEV image tags (updated by CI on every develop branch push)
+
+  3. helm/environments/prod/values.yaml
+     ─ Overrides specific things for the PROD environment.
+     ─ Sets namespace to "prod"
+     ─ Sets replica count to 2 (high availability)
+     ─ Sets MongoDB size to 50Gi
+     ─ Contains PROD image tags (updated by CI on every main branch push)
+
+----- How ArgoCD Merges These Files -----
+
+For DEV:
+  helm/values.yaml  +  helm/environments/dev/values.yaml  →  deploys to namespace "dev"
+
+For PROD:
+  helm/values.yaml  +  helm/environments/prod/values.yaml →  deploys to namespace "prod"
+
+The environment values file WINS over the base file when there is a conflict.
+Example: if values.yaml says replicaCount: 1 and dev/values.yaml also says
+replicaCount: 1, but prod/values.yaml says replicaCount: 2 — then prod gets 2.
+
+----- Service DNS Names -----
+
+Inside Kubernetes, services talk to each other using DNS names.
+The format is: <service-name>.<namespace>.svc.cluster.local:<port>
+
+In dev:  mongodb-0.mongodb-headless.dev.svc.cluster.local:27017
+In prod: mongodb-0.mongodb-headless.prod.svc.cluster.local:27017
+
+These are already configured correctly in each environment values file.
+
+================================================================================
+  SECTION 9 — TRIGGER YOUR FIRST PROD DEPLOYMENT
+================================================================================
+
+Dev deploys automatically. Prod needs a manual trigger the first time.
+
+----- Option A: Via UI -----
+
+  1. Open https://localhost:8080
+  2. Click on the "shopmesh-prod" application
+  3. Click the "SYNC" button (top of the page)
+  4. A dialog appears — click "SYNCHRONIZE"
+  5. Watch the resources appear one by one
+
+----- Option B: Via CLI -----
+
+  argocd app sync shopmesh-prod
+
+----- Monitor the Sync Progress -----
+
+  argocd app get shopmesh-prod
+
+  Or watch continuously:
+    argocd app wait shopmesh-prod --health
+
+================================================================================
+  SECTION 10 — VERIFY THE DEPLOYMENT
+================================================================================
+
+After syncing, check that everything is running correctly.
+
+----- Check All Pods -----
+
+  kubectl get pods -n dev
+  kubectl get pods -n prod
+
+  Good output looks like this:
+    NAME                               READY   STATUS    RESTARTS   AGE
+    shopmesh-auth-service-xxx          1/1     Running   0          3m
+    shopmesh-product-service-xxx       1/1     Running   0          3m
+    shopmesh-order-service-xxx         1/1     Running   0          3m
+    shopmesh-frontend-xxx              1/1     Running   0          3m
+    shopmesh-mongodb-0                 1/1     Running   0          3m
+    shopmesh-gateway-xxx               1/1     Running   0          3m
+
+  Every pod should show:
+    READY   = 1/1    (container is ready to receive traffic)
+    STATUS  = Running
+    RESTARTS = 0     (if > 3, something is wrong — see Troubleshooting)
+
+----- Check Services -----
+
+  kubectl get svc -n dev
+  kubectl get svc -n prod
+
+  You should see a service for each component.
+  The gateway service will have an EXTERNAL-IP if your cluster supports
+  LoadBalancer (cloud clusters). On local clusters it may show "pending".
+
+----- Check ArgoCD Application Health -----
+
+  argocd app list
+
+  Both apps should show:
+    STATUS = Synced
+    HEALTH = Healthy
+
+================================================================================
+  SECTION 11 — ACCESS THE APPLICATION
+================================================================================
+
+----- Access via Port-Forward (Local Clusters / Testing) -----
+
+Forward the gateway service to your local machine:
+
+  kubectl port-forward svc/shopmesh-gateway -n dev 8081:80
+
+Then open: http://localhost:8081
+
+To access specific services directly for debugging:
+
+  # Frontend
+  kubectl port-forward svc/shopmesh-frontend -n dev 3000:80
+  Open: http://localhost:3000
+
+  # Auth Service API
+  kubectl port-forward svc/shopmesh-auth-service -n dev 3001:3001
+  Open: http://localhost:3001/health
+
+  # Product Service API
+  kubectl port-forward svc/shopmesh-product-service -n dev 3002:3002
+  Open: http://localhost:3002/health
+
+----- Access via LoadBalancer (Cloud Clusters) -----
+
+  kubectl get svc shopmesh-gateway -n prod
+
+  Copy the EXTERNAL-IP value and open: http://<EXTERNAL-IP>
+
+================================================================================
+  SECTION 12 — THE GITOPS WORKFLOW (HOW DEPLOYMENTS WORK)
+================================================================================
+
+This is the core of the system. Once set up, deployments happen automatically
+just by pushing code. Here is the complete flow:
+
+═══════════════════════════════════════════════════════════════════
+  DEV DEPLOYMENT FLOW (Fully Automatic)
+═══════════════════════════════════════════════════════════════════
+
+  Step 1: Developer writes code and pushes to the service repo
+          (e.g., github.com/shopmesh/auth-service, branch: develop)
+
+  Step 2: GitHub Actions CI pipeline triggers automatically
+          - Runs tests
+          - Builds a Docker image
+          - Tags it with the short commit hash (example: dev-a1b2c3d)
+          - Pushes the image to the container registry
+
+  Step 3: CI pipeline updates the infra repo
+          - Clones shopmesh-infra
+          - Checks out the "develop" branch
+          - Edits helm/environments/dev/values.yaml:
+              auth-service:
+                image:
+                  tag: "dev-a1b2c3d"   ← changes this line
+          - Commits and pushes to the "develop" branch
+
+  Step 4: ArgoCD detects the change
+          - ArgoCD polls the shopmesh-infra repo every 3 minutes
+          - It notices that helm/environments/dev/values.yaml changed
+          - It compares what's in Git vs what's running in the cluster
+          - It sees the image tag is different
+
+  Step 5: ArgoCD auto-syncs
+          - ArgoCD renders the Helm chart with the new values
+          - It applies the updated Deployment to Kubernetes
+          - Kubernetes performs a rolling update (zero downtime)
+          - The new pod comes up before the old one is terminated
+
+  ✅ Result: Dev namespace is updated automatically. No human needed.
+
+═══════════════════════════════════════════════════════════════════
+  PROD DEPLOYMENT FLOW (Manual Approval Required)
+═══════════════════════════════════════════════════════════════════
+
+  Step 1–2: Same as dev (code push → CI builds image)
+
+  Step 3: CI pipeline updates the infra repo
+          - Checks out the "main" branch of shopmesh-infra
+          - Edits helm/environments/prod/values.yaml:
+              auth-service:
+                image:
+                  tag: "v1.2.3"   ← changes this line
+          - Commits and pushes to "main"
+
+  Step 4: ArgoCD detects the change
+          - Notices helm/environments/prod/values.yaml changed
+          - Shows shopmesh-prod as "OutOfSync" in the UI
+
+  Step 5: Human reviews and approves
+          - Open ArgoCD UI: https://localhost:8080
+          - Click on "shopmesh-prod"
+          - Review what changed (ArgoCD shows a diff)
+          - Click "SYNC" → "SYNCHRONIZE"
+
+          OR use CLI:
+            argocd app sync shopmesh-prod
+
+  Step 6: ArgoCD deploys to production
+          - Same rolling update process
+          - Zero downtime if enough replicas are running
+
+  ✅ Result: Prod namespace is updated only after human approval.
+
+═══════════════════════════════════════════════════════════════════
+  WHY THIS IS BETTER THAN MANUAL DEPLOYMENTS
+═══════════════════════════════════════════════════════════════════
+
+  Traditional:  Developer SSHes into server, runs scripts, hopes it works
+  GitOps:       Developer pushes code, everything else is automatic and auditable
+
+  Benefits:
+  - Every change is tracked in Git (full audit trail)
+  - If something breaks, git revert rolls back instantly
+  - Cluster state always matches what's in Git
+  - No "it works on my machine" — Git IS the source of truth
+
+================================================================================
+  SECTION 13 — DEV VS PROD BEHAVIOR COMPARISON
+================================================================================
+
+  Feature              | DEV                        | PROD
+  ---------------------|----------------------------|--------------------------
+  Git Branch           | develop                    | main
+  Namespace            | dev                        | prod
+  Sync Mode            | Automatic (every 3 min)    | Manual only
+  Replicas per service | 1                          | 2
+  MongoDB Storage      | 5Gi                        | 50Gi
+  MongoDB NFS Path     | /exports/mongodb-dev       | /exports/mongodb
+  Service DNS          | *.dev.svc.cluster.local    | *.prod.svc.cluster.local
+  Purpose              | Development and testing    | Live production traffic
+
+----- How to Trigger a Manual Prod Sync -----
+
+  Via UI:
+    1. Go to https://localhost:8080
+    2. Click "shopmesh-prod"
+    3. Click "SYNC" button
+    4. Optionally check "DRY RUN" first to preview what will change
+    5. Click "SYNCHRONIZE"
+
+  Via CLI:
+    # Preview changes without applying (dry run)
+    argocd app diff shopmesh-prod
+
+    # Apply changes
+    argocd app sync shopmesh-prod
+
+----- How to Disable Auto-Sync Temporarily (Dev) -----
+
+  Sometimes you want to pause auto-sync while debugging:
+
+    argocd app set shopmesh-dev --sync-policy none
+
+  Re-enable when done:
+    argocd app set shopmesh-dev --sync-policy automated
+
+================================================================================
+  SECTION 14 — HOW TO UPDATE AN IMAGE TAG MANUALLY (Without CI)
+================================================================================
+
+If CI is not set up yet and you want to test a deployment manually:
+
+  Step 1: Edit the values file for your environment
+
+    # For dev
+    code helm/environments/dev/values.yaml
+    # OR use any text editor
+
+  Step 2: Find the service you want to update and change the tag
+
+    auth-service:
+      image:
+        tag: "my-new-tag-here"    ← change this
+
+  Step 3: Commit and push to the correct branch
+
+    # For dev environment
+    git add helm/environments/dev/values.yaml
+    git commit -m "ci: update auth-service to my-new-tag-here"
+    git push origin develop
+
+    # For prod environment
+    git add helm/environments/prod/values.yaml
+    git commit -m "release: update auth-service to v1.2.3"
+    git push origin main
+
+  Step 4: Wait for ArgoCD
+    - Dev: ArgoCD auto-syncs within 3 minutes
+    - Prod: Trigger sync manually in the UI or CLI
+
+================================================================================
+  SECTION 15 — ROLLBACK A DEPLOYMENT
+================================================================================
+
+If something goes wrong after a deployment, you have two rollback options:
+
+----- Option A: Git Revert (Recommended — keeps Git as truth) -----
+
+  # Find the commit hash of the last good state
+  git log --oneline helm/environments/dev/values.yaml
+
+  # Revert to the previous commit
+  git revert HEAD
+  git push origin develop
+
+  ArgoCD sees the revert commit and rolls back automatically (dev).
+  For prod, trigger a manual sync after the revert push.
+
+----- Option B: ArgoCD Emergency Rollback (Does NOT update Git) -----
+
+  Use this only in an emergency. It will cause Git and the cluster to
+  be out of sync until you reconcile.
+
+  Via UI:
+    Click on the application → "HISTORY AND ROLLBACK" → select previous sync
+
+  Via CLI:
+    # See sync history
+    argocd app history shopmesh-dev
+
+    # Rollback to a specific version (ID from history)
+    argocd app rollback shopmesh-dev <ID>
+
+================================================================================
+  SECTION 16 — TROUBLESHOOTING
+================================================================================
+
+-----------------------------------------------------------------
+  PROBLEM 1: ArgoCD app is stuck in "Unknown" or not appearing
+-----------------------------------------------------------------
+
+Cause: AppProject not applied before App of Apps.
+
+Fix:
+  kubectl apply -f argocd/projects/dev-project.yaml
+  kubectl apply -f argocd/projects/prod-project.yaml
+  kubectl apply -f argocd/bootstrap/app-of-apps.yaml
+
+Check ArgoCD logs:
+  kubectl logs -n argocd deploy/argocd-application-controller --tail=50
+
+-----------------------------------------------------------------
+  PROBLEM 2: App shows "ComparisonError" or repo access failed
+-----------------------------------------------------------------
+
+Cause: ArgoCD cannot read the GitHub repository.
+
+Fix:
+  # Check repo status
+  argocd repo list
+
+  If STATUS is not "Successful":
+  # Re-add the repo
+  argocd repo add https://github.com/shopmesh/shopmesh-infra.git \
+    --username YOUR_GITHUB_USERNAME \
+    --password YOUR_GITHUB_PAT
+
+  Verify the repo URL in your Application YAML files exactly matches
+  what you registered. Even a trailing slash difference will cause failure.
+
+-----------------------------------------------------------------
+  PROBLEM 3: Pods stuck in "Pending"
+-----------------------------------------------------------------
+
+Cause A: No NFS PersistentVolume available (MongoDB).
+
+Fix:
+  kubectl describe pod shopmesh-mongodb-0 -n dev | grep -A10 "Events:"
+
+  If you see "no persistent volumes available":
+  - Check that your NFS server is reachable from the cluster
+  - Verify the server IP and path in helm/environments/dev/values.yaml
+  - Make sure the NFS export path exists and is accessible
+
+Cause B: Not enough CPU or memory on cluster nodes.
+
+Fix:
+  kubectl describe node | grep -A5 "Allocated resources"
+  # If memory or CPU is at 100%, your cluster needs more resources
+
+-----------------------------------------------------------------
+  PROBLEM 4: Pods in "CrashLoopBackOff"
+-----------------------------------------------------------------
+
+This means the container starts but immediately crashes.
+
+Step 1: Find which pod is crashing
+  kubectl get pods -n dev
+
+Step 2: Read the logs
+  kubectl logs <pod-name> -n dev
+
+  If the pod keeps restarting, read the previous attempt's logs:
+  kubectl logs <pod-name> -n dev --previous
+
+Step 3: Common causes and fixes
+
+  "Cannot connect to MongoDB":
+  → Check that MongoDB pod is Running first
+  → Verify MONGO_URI in the values file matches the correct namespace
+  → Dev should use: mongodb-0.mongodb-headless.dev.svc.cluster.local
+
+  "Port already in use":
+  → Delete the pod and let Kubernetes recreate it:
+    kubectl delete pod <pod-name> -n dev
+
+  "Permission denied":
+  → Check the securityContext settings in the deployment template
+
+-----------------------------------------------------------------
+  PROBLEM 5: ImagePullBackOff
+-----------------------------------------------------------------
+
+Cause A: The image tag does not exist in the registry.
+
+Fix:
+  kubectl describe pod <pod-name> -n dev | grep "image:"
+  # Check the exact image:tag being pulled
+
+  Go to your container registry and confirm the tag exists.
+  If not, trigger CI to rebuild or correct the tag in the values file.
+
+Cause B: Private registry requires credentials.
+
+Fix:
+  # Create image pull secret
+  kubectl create secret docker-registry regcred \
+    --docker-server=YOUR_REGISTRY \
+    --docker-username=YOUR_USERNAME \
+    --docker-password=YOUR_PASSWORD \
+    --namespace dev
+
+  Then reference it in your Deployment (add to imagePullSecrets).
+
+-----------------------------------------------------------------
+  PROBLEM 6: Wrong image tag — need to fix quickly
+-----------------------------------------------------------------
+
+Fix:
+  # Edit the values file
+  nano helm/environments/dev/values.yaml
+  # Find the wrong tag and correct it
+
+  # Commit immediately
+  git add helm/environments/dev/values.yaml
+  git commit -m "fix: correct auth-service image tag"
+  git push origin develop
+
+  # ArgoCD auto-syncs within 3 minutes
+  # To sync immediately without waiting:
+  argocd app sync shopmesh-dev
+
+-----------------------------------------------------------------
+  PROBLEM 7: ArgoCD shows "OutOfSync" but nothing changed
+-----------------------------------------------------------------
+
+Cause: Helm generated different output (timestamps, random values, etc.)
+
+Fix:
+  # See exactly what ArgoCD thinks is different
+  argocd app diff shopmesh-dev
+
+  If the diff is minor and expected (metadata, timestamps), force a sync:
+  argocd app sync shopmesh-dev --force
+
+  If it recurs, check for non-deterministic templates in your Helm chart.
+
+-----------------------------------------------------------------
+  PROBLEM 8: Application health shows "Degraded"
+-----------------------------------------------------------------
+
+Cause: A resource created by ArgoCD is in a bad state.
+
+Fix:
+  # In the UI: click the unhealthy resource (shown in red/yellow) to see details
+
+  # Via CLI:
+  argocd app get shopmesh-dev
+
+  Look at each resource's HEALTH column. Find the one that is not Healthy
+  and investigate that specific resource.
+
+  kubectl describe <resource-type> <resource-name> -n dev
+
+================================================================================
+  SECTION 17 — USEFUL COMMANDS REFERENCE
+================================================================================
+
+--- ArgoCD Application Management ---
+
+  argocd app list                        # list all applications
+  argocd app get shopmesh-dev            # detailed status of dev app
+  argocd app get shopmesh-prod           # detailed status of prod app
+  argocd app sync shopmesh-dev           # sync dev immediately
+  argocd app sync shopmesh-prod          # sync prod (manual trigger)
+  argocd app diff shopmesh-dev           # show what would change
+  argocd app history shopmesh-prod       # deployment history
+  argocd app rollback shopmesh-prod <ID> # rollback to previous version
+  argocd app wait shopmesh-dev --health  # wait for health
+
+--- Kubernetes Pod Inspection ---
+
+  kubectl get pods -n dev                # all pods in dev
+  kubectl get pods -n prod               # all pods in prod
+  kubectl get pods -A                    # all pods in all namespaces
+  kubectl logs <pod> -n dev              # pod logs
+  kubectl logs <pod> -n dev --previous   # logs from crashed pod
+  kubectl describe pod <pod> -n dev      # detailed pod info and events
+  kubectl delete pod <pod> -n dev        # force pod restart
+
+--- Kubernetes Service Inspection ---
+
+  kubectl get svc -n dev                 # services in dev
+  kubectl get svc -n prod                # services in prod
+
+--- Port Forwarding ---
+
+  kubectl port-forward svc/argocd-server -n argocd 8080:443  # ArgoCD UI
+  kubectl port-forward svc/shopmesh-gateway -n dev 8081:80   # dev gateway
+  kubectl port-forward svc/shopmesh-gateway -n prod 8082:80  # prod gateway
+
+--- MongoDB StatefulSet ---
+
+  kubectl get statefulset -n dev         # check MongoDB StatefulSet
+  kubectl get pvc -n dev                 # check PersistentVolumeClaim status
+  kubectl get pv                         # check PersistentVolumes
+
+================================================================================
+  SECTION 18 — SUMMARY CHECKLIST
+================================================================================
+
+Use this checklist for a clean first deployment:
+
+  [ ] ArgoCD installed and all pods Running
+  [ ] ArgoCD UI accessible at https://localhost:8080
+  [ ] Admin password retrieved and changed
+  [ ] shopmesh-infra repo registered in ArgoCD
+  [ ] NFS server IP and path updated in dev/values.yaml and prod/values.yaml
+  [ ] Changes committed and pushed to both develop and main branches
+  [ ] AppProjects applied: kubectl apply -f argocd/projects/
+  [ ] App of Apps applied: kubectl apply -f argocd/bootstrap/app-of-apps.yaml
+  [ ] shopmesh-app-of-apps shows Synced / Healthy in UI
+  [ ] shopmesh-dev shows Synced / Healthy in UI
+  [ ] All pods in dev namespace show Running
+  [ ] Manual sync triggered for shopmesh-prod
+  [ ] All pods in prod namespace show Running
+  [ ] Application accessible via port-forward
+  [ ] Tested GitOps flow: pushed a tag change → ArgoCD auto-synced dev
+
+================================================================================
+  END OF GUIDE
+================================================================================
+
+For more information:
+  ArgoCD documentation:    https://argo-cd.readthedocs.io/
+  Helm documentation:      https://helm.sh/docs/
+  Kubernetes documentation: https://kubernetes.io/docs/home/

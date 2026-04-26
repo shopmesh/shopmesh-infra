@@ -1,0 +1,298 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# helm-charts/values.yaml
+#
+# GLOBAL values file — the ONLY values.yaml in the entire chart hierarchy.
+# Sub-charts reference these values via the parent scope:
+#   .Values.<chart-name>.*  within the umbrella context
+#   .Values.*               within each sub-chart template
+#
+# Deploy:  helm install shopmesh ./helm-charts -n shopmesh --create-namespace
+# Upgrade: helm upgrade  shopmesh ./helm-charts -n shopmesh
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Global settings shared by every chart ─────────────────────────────────────
+global:
+  # Kubernetes namespace for all resources
+  namespace: shopmesh
+
+  # Image pull policy applied to every service
+  imagePullPolicy: Always
+
+  # Project-wide label applied to every resource
+  partOf: shopmesh
+
+  # ── Gateway toggle ──────────────────────────────────────────────────────────
+  # true  → deploy Envoy Gateway API (GatewayClass / Gateway / HTTPRoute)
+  # false → deploy the legacy Nginx Ingress instead
+  gateway:
+    enabled: true
+
+  # ── Legacy Ingress (only used when global.gateway.enabled = false) ──────────
+  ingress:
+    className: nginx
+    annotations:
+      nginx.ingress.kubernetes.io/use-regex: "true"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# auth-service
+# ══════════════════════════════════════════════════════════════════════════════
+auth-service:
+  image:
+    repository: priyatham753/auth-service
+    tag: latest
+
+  replicaCount: 2
+
+  port: 3001
+
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+
+  env:
+    PORT: "3001"
+    NODE_ENV: "production"
+    JWT_EXPIRES_IN: "24h"
+    MONGO_HOST: "mongodb-0.mongodb-headless.shopmesh.svc.cluster.local"
+    MONGO_PORT: "27017"
+    MONGO_DB: "authdb"
+
+  # Sensitive values — base64-encoded (same as original secret.yaml)
+  secrets:
+    # echo -n 'shopmesh_jwt_secret_change_in_production_2024' | base64
+    JWT_SECRET: c2hvcG1lc2hfand0X3NlY3JldF9jaGFuZ2VfaW5fcHJvZHVjdGlvbl8yMDI0
+    # echo -n 'mongodb://admin:shopmesh-db-password-2024@mongodb-0...' | base64
+    MONGO_URI: bW9uZ29kYjovL2FkbWluOnNob3BtZXNoLWRiLXBhc3N3b3JkLTIwMjRAbW9uZ29kYi0wLm1vbmdvZGItaGVhZGxlc3Muc2hvcG1lc2guc3ZjLmNsdXN0ZXIubG9jYWw6MjcwMTcvYXV0aGRiP2F1dGhTb3VyY2U9YWRtaW4=
+
+  probes:
+    liveness:
+      path: /health
+      initialDelaySeconds: 30
+      periodSeconds: 20
+      timeoutSeconds: 5
+      failureThreshold: 3
+    readiness:
+      path: /health
+      initialDelaySeconds: 10
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 3
+
+# ══════════════════════════════════════════════════════════════════════════════
+# product-service
+# ══════════════════════════════════════════════════════════════════════════════
+product-service:
+  image:
+    repository: priyatham753/product-service
+    tag: latest
+
+  replicaCount: 2
+
+  port: 3002
+
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+
+  env:
+    PORT: "3002"
+    NODE_ENV: "production"
+    AUTH_SERVICE_URL: "http://auth-service.shopmesh.svc.cluster.local:3001"
+    MONGO_HOST: "mongodb-0.mongodb-headless.shopmesh.svc.cluster.local"
+    MONGO_PORT: "27017"
+    MONGO_DB: "productdb"
+
+  secrets:
+    # echo -n 'mongodb://admin:shopmesh-db-password-2024@...productdb?authSource=admin' | base64
+    MONGO_URI: bW9uZ29kYjovL2FkbWluOnNob3BtZXNoLWRiLXBhc3N3b3JkLTIwMjRAbW9uZ29kYi0wLm1vbmdvZGItaGVhZGxlc3Muc2hvcG1lc2guc3ZjLmNsdXN0ZXIubG9jYWw6MjcwMTcvcHJvZHVjdGRiP2F1dGhTb3VyY2U9YWRtaW4=
+
+  probes:
+    liveness:
+      path: /health
+      initialDelaySeconds: 30
+      periodSeconds: 20
+      timeoutSeconds: 5
+      failureThreshold: 3
+    readiness:
+      path: /health
+      initialDelaySeconds: 10
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 3
+
+# ══════════════════════════════════════════════════════════════════════════════
+# order-service
+# ══════════════════════════════════════════════════════════════════════════════
+order-service:
+  image:
+    repository: priyatham753/order-service
+    tag: latest
+
+  replicaCount: 2
+
+  port: 3003
+
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+
+  env:
+    PORT: "3003"
+    NODE_ENV: "production"
+    DB_NAME: "orderdb"
+    AUTH_SERVICE_URL: "http://auth-service.shopmesh.svc.cluster.local:3001"
+    PRODUCT_SERVICE_URL: "http://product-service.shopmesh.svc.cluster.local:3002"
+    MONGO_HOST: "mongodb-0.mongodb-headless.shopmesh.svc.cluster.local"
+    MONGO_PORT: "27017"
+
+  secrets:
+    # echo -n 'mongodb://admin:shopmesh-db-password-2024@...27017' | base64
+    MONGO_URI: bW9uZ29kYjovL2FkbWluOnNob3BtZXNoLWRiLXBhc3N3b3JkLTIwMjRAbW9uZ29kYi0wLm1vbmdvZGItaGVhZGxlc3Muc2hvcG1lc2guc3ZjLmNsdXN0ZXIubG9jYWw6MjcwMTc=
+
+  probes:
+    liveness:
+      path: /health
+      initialDelaySeconds: 40
+      periodSeconds: 20
+      timeoutSeconds: 5
+      failureThreshold: 3
+    readiness:
+      path: /health
+      initialDelaySeconds: 15
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 3
+
+# ══════════════════════════════════════════════════════════════════════════════
+# frontend
+# ══════════════════════════════════════════════════════════════════════════════
+frontend:
+  image:
+    repository: priyatham753/frontend
+    tag: latest
+
+  replicaCount: 2
+
+  port: 80
+
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "200m"
+      memory: "256Mi"
+
+  env:
+    REACT_APP_AUTH_SERVICE_URL: "/api/auth"
+    REACT_APP_PRODUCT_SERVICE_URL: "/api/products"
+    REACT_APP_ORDER_SERVICE_URL: "/api/orders"
+    NGINX_PORT: "80"
+
+  probes:
+    liveness:
+      path: /
+      initialDelaySeconds: 15
+      periodSeconds: 20
+      timeoutSeconds: 5
+      failureThreshold: 3
+    readiness:
+      path: /
+      initialDelaySeconds: 5
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 3
+
+# ══════════════════════════════════════════════════════════════════════════════
+# mongodb
+# ══════════════════════════════════════════════════════════════════════════════
+mongodb:
+  image:
+    repository: mongo
+    tag: "7.0"
+
+  # StatefulSet — single primary node
+  replicaCount: 1
+
+  port: 27017
+
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "256Mi"
+    limits:
+      cpu: "1000m"
+      memory: "1Gi"
+
+  # Persistent storage
+  storage:
+    storageClassName: nfs-storage
+    size: 10Gi
+    accessMode: ReadWriteMany
+
+  # NFS PersistentVolume settings (used in pvc.yaml StorageClass)
+  nfs:
+    server: "172.31.24.10"       # ← Replace with your NFS server IP
+    path: "/exports/mongodb"     # ← Replace with your NFS export path
+
+  # Root credentials — base64-encoded
+  secrets:
+    # echo -n 'admin' | base64
+    MONGO_ROOT_USERNAME: YWRtaW4=
+    # echo -n 'shopmesh-db-password-2024' | base64
+    MONGO_ROOT_PASSWORD: c2hvcG1lc2gtZGItcGFzc3dvcmQtMjAyNA==
+    AUTH_MONGO_URI: bW9uZ29kYjovL2FkbWluOnNob3BtZXNoLWRiLXBhc3N3b3JkLTIwMjRAbW9uZ29kYi0wLm1vbmdvZGItaGVhZGxlc3Muc2hvcG1lc2guc3ZjLmNsdXN0ZXIubG9jYWw6MjcwMTcvYXV0aGRiP2F1dGhTb3VyY2U9YWRtaW4=
+    PRODUCT_MONGO_URI: bW9uZ29kYjovL2FkbWluOnNob3BtZXNoLWRiLXBhc3N3b3JkLTIwMjRAbW9uZ29kYi0wLm1vbmdvZGItaGVhZGxlc3Muc2hvcG1lc2guc3ZjLmNsdXN0ZXIubG9jYWw6MjcwMTcvcHJvZHVjdGRiP2F1dGhTb3VyY2U9YWRtaW4=
+    ORDER_MONGO_URI: bW9uZ29kYjovL2FkbWluOnNob3BtZXNoLWRiLXBhc3N3b3JkLTIwMjRAbW9uZ29kYi0wLm1vbmdvZGItaGVhZGxlc3Muc2hvcG1lc2guc3ZjLmNsdXN0ZXIubG9jYWw6MjcwMTc=
+
+  probes:
+    liveness:
+      initialDelaySeconds: 30
+      periodSeconds: 20
+      timeoutSeconds: 10
+      failureThreshold: 3
+    readiness:
+      initialDelaySeconds: 15
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 3
+
+# ══════════════════════════════════════════════════════════════════════════════
+# gateway
+# ══════════════════════════════════════════════════════════════════════════════
+gateway:
+  # GatewayClass name — must match the Envoy Gateway controller name
+  gatewayClassName: envoy-gateway-class
+
+  # Listener configuration
+  listener:
+    name: http
+    port: 80
+    protocol: HTTP
+
+  # HTTPRoute path → backend mapping
+  routes:
+    - path: /auth
+      serviceName: auth-service
+      servicePort: 3001
+    - path: /products
+      serviceName: product-service
+      servicePort: 3002
+    - path: /orders
+      serviceName: order-service
+      servicePort: 3003
+    - path: /
+      serviceName: frontend
+      servicePort: 80
