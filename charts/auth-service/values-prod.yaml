@@ -13,7 +13,7 @@ global:
       nginx.ingress.kubernetes.io/use-regex: "true"
 image:
   repository: priyatham753/auth-service
-  tag: "v0.1.0" # <-- CI updates this (semantic version)
+  tag: "v0.1.1" # <-- CI updates this (semantic version)
 replicaCount: 2
 port: 3001
 resources:
