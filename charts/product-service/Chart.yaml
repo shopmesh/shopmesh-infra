@@ -1,0 +1,6 @@
+apiVersion: v2
+name: product-service
+description: Product Service sub-chart for ShopMesh (product catalog, Node.js, port 3002)
+type: application
+version: 1.0.0
+appVersion: "1.0.0"

@@ -1,0 +1,29 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: dev-order-service
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: shopmesh-dev
+
+  source:
+    repoURL: https://github.com/shopmesh/shopmesh-infra.git
+    targetRevision: main
+    path: charts/order-service
+    helm:
+      valueFiles:
+        - values-dev.yaml
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: dev
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

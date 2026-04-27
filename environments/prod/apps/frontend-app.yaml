@@ -1,0 +1,29 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: prod-frontend
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: shopmesh-prod
+
+  source:
+    repoURL: https://github.com/shopmesh/shopmesh-infra.git
+    targetRevision: main
+    path: charts/frontend
+    helm:
+      valueFiles:
+        - values-prod.yaml
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: prod
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

@@ -1,0 +1,24 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# charts/order-service/templates/service.yaml
+# Internal DNS: order-service.shopmesh.svc.cluster.local:3003
+# ──────────────────────────────────────────────────────────────────────────────
+{{- $vals := .Values }}
+{{- $global := .Values.global }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: order-service
+  namespace: {{ $global.namespace }}
+  labels:
+    app.kubernetes.io/name: order-service
+    app.kubernetes.io/part-of: {{ $global.partOf }}
+    app.kubernetes.io/component: backend
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: order-service
+  ports:
+    - name: http
+      protocol: TCP
+      port: {{ $vals.port }}
+      targetPort: {{ $vals.port }}

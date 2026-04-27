@@ -1,0 +1,25 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# charts/mongodb/templates/service.yaml
+# Headless Service — gives each StatefulSet pod a stable DNS:
+#   mongodb-0.mongodb-headless.shopmesh.svc.cluster.local:27017
+# ──────────────────────────────────────────────────────────────────────────────
+{{- $vals := .Values }}
+{{- $global := .Values.global }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongodb-headless
+  namespace: {{ $global.namespace }}
+  labels:
+    app.kubernetes.io/name: mongodb
+    app.kubernetes.io/part-of: {{ $global.partOf }}
+    app.kubernetes.io/component: database
+spec:
+  clusterIP: None          # ← Headless — DNS returns pod IPs directly
+  selector:
+    app.kubernetes.io/name: mongodb
+  ports:
+    - name: mongodb
+      protocol: TCP
+      port: {{ $vals.port }}
+      targetPort: {{ $vals.port }}

@@ -1,0 +1,25 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# charts/gateway/templates/gatewayclass.yaml
+#
+# Kubernetes Gateway API — GatewayClass resource.
+# Only rendered when global.gateway.enabled = true.
+#
+# This registers "envoy-gateway-class" as the controller that manages
+# all Gateway objects referencing this class.
+# ──────────────────────────────────────────────────────────────────────────────
+{{- if .Values.global.gateway.enabled }}
+#{{- $vals := .Values }}
+{{- $gw := .Values }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: {{ $gw.gatewayClassName }}
+  labels:
+
+    app.kubernetes.io/part-of: {{ .Values.global.partOf }}
+    app.kubernetes.io/component: gateway
+spec:
+  # The value here must match the --gateway-class-name flag of the
+  # Envoy Gateway controller deployment in your cluster.
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+{{- end }}

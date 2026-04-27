@@ -1,0 +1,24 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# charts/frontend/templates/service.yaml
+# Internal DNS: frontend.shopmesh.svc.cluster.local:80
+# ──────────────────────────────────────────────────────────────────────────────
+{{- $vals := .Values }}
+{{- $global := .Values.global }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+  namespace: {{ $global.namespace }}
+  labels:
+    app.kubernetes.io/name: frontend
+    app.kubernetes.io/part-of: {{ $global.partOf }}
+    app.kubernetes.io/component: frontend
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: frontend
+  ports:
+    - name: http
+      protocol: TCP
+      port: {{ $vals.port }}
+      targetPort: {{ $vals.port }}

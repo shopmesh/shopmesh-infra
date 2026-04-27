@@ -1,0 +1,416 @@
+================================================================================
+  SHOPMESH — CLUSTER DEPLOYMENT GUIDE
+  App of Apps GitOps Pattern | ArgoCD | Helm | Dev & Prod Environments
+================================================================================
+
+PREREQUISITES
+─────────────
+Before you begin, make sure the following are ready:
+
+  1. A running Kubernetes cluster (K3s, EKS, GKE, kubeadm, etc.)
+  2. kubectl configured and pointing to your cluster
+       kubectl cluster-info
+  3. Helm v3 installed on your local machine
+       helm version
+  4. ArgoCD v2.6+ installed in the cluster (we are using v3.3.8)
+  5. The shopmesh/shopmesh-infra repository pushed to GitHub (main branch)
+  6. The ArgoCD CLI installed locally (optional but helpful)
+       argocd version
+
+
+================================================================================
+STEP 1 — INSTALL ARGOCD (skip if already installed)
+================================================================================
+
+  kubectl create namespace argocd
+
+  kubectl apply -n argocd \
+    -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+
+  # Wait for all pods to be Running
+  kubectl wait --for=condition=Ready pod \
+    -l app.kubernetes.io/name=argocd-server \
+    -n argocd --timeout=120s
+
+  # Get the initial admin password
+  kubectl -n argocd get secret argocd-initial-admin-secret \
+    -o jsonpath="{.data.password}" | base64 -d && echo
+
+  # Port-forward to access the UI locally
+  kubectl port-forward svc/argocd-server -n argocd 8080:443
+
+  # Open https://localhost:8080 in your browser
+  # Login: admin / <password from above>
+
+
+================================================================================
+STEP 2 — ADD shopmesh-infra REPO TO ARGOCD
+================================================================================
+
+  ArgoCD needs access to your private GitHub repo to read the manifests.
+
+  Option A — Via ArgoCD UI:
+    Settings → Repositories → Connect Repo
+    Type      : git
+    URL       : https://github.com/shopmesh/shopmesh-infra.git
+    Username  : your-github-username
+    Password  : your-github-PAT (Personal Access Token with repo scope)
+
+  Option B — Via CLI:
+    argocd repo add https://github.com/shopmesh/shopmesh-infra.git \
+      --username your-github-username \
+      --password your-github-PAT
+
+  NOTE: If the repo is public, no credentials are needed.
+
+
+================================================================================
+STEP 3 — CREATE ARGOCD APP PROJECTS
+================================================================================
+
+  Projects scope which namespaces and repos each Application is allowed to use.
+  Apply both project files from the repo:
+
+  kubectl apply -f argocd/projects/dev-project.yaml
+  kubectl apply -f argocd/projects/prod-project.yaml
+
+  Verify:
+    kubectl get appprojects -n argocd
+    # Should show: shopmesh-dev   shopmesh-prod
+
+
+================================================================================
+STEP 4 — CREATE THE NAMESPACES
+================================================================================
+
+  Create the two namespaces where your services will be deployed:
+
+  kubectl create namespace dev
+  kubectl create namespace prod
+
+  Verify:
+    kubectl get namespaces | grep -E "dev|prod"
+
+
+================================================================================
+STEP 5 — BOOTSTRAP DEV ENVIRONMENT (App of Apps)
+================================================================================
+
+  This single command kicks off the entire dev deployment.
+  ArgoCD will read environments/dev/apps/ and automatically create
+  6 child Applications (one per service).
+
+  kubectl apply -f environments/dev/root-app.yaml
+
+  What happens after this:
+    1. ArgoCD creates the "shopmesh-root-dev" Application
+    2. It watches environments/dev/apps/ directory
+    3. It automatically creates 6 child Applications:
+         dev-auth-service
+         dev-product-service
+         dev-order-service
+         dev-frontend
+         dev-mongodb
+         dev-gateway
+    4. Each child app deploys its chart from charts/<service>/
+       using charts/<service>/values-dev.yaml
+    5. All services are deployed into the "dev" namespace
+
+  Monitor progress:
+    kubectl get applications -n argocd
+    # Or open ArgoCD UI and watch the apps sync
+
+
+================================================================================
+STEP 6 — BOOTSTRAP PROD ENVIRONMENT (App of Apps)
+================================================================================
+
+  kubectl apply -f environments/prod/root-app.yaml
+
+  What happens after this:
+    1. ArgoCD creates the "shopmesh-root-prod" Application
+    2. It watches environments/prod/apps/ directory
+    3. It automatically creates 6 child Applications:
+         prod-auth-service
+         prod-product-service
+         prod-order-service
+         prod-frontend
+         prod-mongodb
+         prod-gateway
+    4. Each child app deploys its chart from charts/<service>/
+       using charts/<service>/values-prod.yaml
+    5. All services are deployed into the "prod" namespace
+
+  Monitor progress:
+    kubectl get applications -n argocd
+
+
+================================================================================
+STEP 7 — VERIFY ALL APPLICATIONS ARE SYNCED
+================================================================================
+
+  Check ArgoCD Application status:
+
+    kubectl get applications -n argocd
+
+  Expected output (all should be Synced + Healthy):
+
+    NAME                   SYNC STATUS   HEALTH STATUS
+    shopmesh-root-dev      Synced        Healthy
+    shopmesh-root-prod     Synced        Healthy
+    dev-auth-service       Synced        Healthy
+    dev-product-service    Synced        Healthy
+    dev-order-service      Synced        Healthy
+    dev-frontend           Synced        Healthy
+    dev-mongodb            Synced        Healthy
+    dev-gateway            Synced        Healthy
+    prod-auth-service      Synced        Healthy
+    prod-product-service   Synced        Healthy
+    prod-order-service     Synced        Healthy
+    prod-frontend          Synced        Healthy
+    prod-mongodb           Synced        Healthy
+    prod-gateway           Synced        Healthy
+
+
+================================================================================
+STEP 8 — VERIFY PODS ARE RUNNING
+================================================================================
+
+  Check DEV namespace:
+    kubectl get pods -n dev
+
+  Expected:
+    NAME                               READY   STATUS    RESTARTS
+    auth-service-xxxxxxxxx-xxxxx       1/1     Running   0
+    product-service-xxxxxxxxx-xxxxx    1/1     Running   0
+    order-service-xxxxxxxxx-xxxxx      1/1     Running   0
+    frontend-xxxxxxxxx-xxxxx           1/1     Running   0
+    mongodb-0                          1/1     Running   0
+
+  Check PROD namespace:
+    kubectl get pods -n prod
+
+  Check Services:
+    kubectl get svc -n dev
+    kubectl get svc -n prod
+
+
+================================================================================
+STEP 9 — NFS STORAGE (MongoDB Persistent Volume)
+================================================================================
+
+  MongoDB requires an NFS server for persistent storage.
+  Update the NFS server IP in BOTH values files before deploying:
+
+  File: charts/mongodb/values-dev.yaml
+    nfs:
+      server: "172.31.24.10"       ← Replace with your actual NFS server IP
+      path: "/exports/mongodb-dev" ← Replace with your NFS export path
+
+  File: charts/mongodb/values-prod.yaml
+    nfs:
+      server: "172.31.24.10"       ← Replace with your actual NFS server IP
+      path: "/exports/mongodb"     ← Replace with your NFS export path
+
+  After editing, commit and push to GitHub.
+  ArgoCD will detect the change and auto-sync within 3 minutes.
+
+  Verify PVCs are bound:
+    kubectl get pvc -n dev
+    kubectl get pvc -n prod
+
+
+================================================================================
+STEP 10 — VERIFY GATEWAY (Envoy Gateway API)
+================================================================================
+
+  The gateway routes all external traffic to the correct services.
+
+  Check Gateway is created:
+    kubectl get gateway -n dev
+    kubectl get gateway -n prod
+
+  Check HTTPRoutes:
+    kubectl get httproute -n dev
+    kubectl get httproute -n prod
+
+  Expected routing:
+    /api/auth     → auth-service:3001
+    /api/products → product-service:3002
+    /api/orders   → order-service:3003
+    /             → frontend:80
+
+  NOTE: You need the Envoy Gateway controller installed separately.
+  If not installed:
+    helm install eg oci://docker.io/envoyproxy/gateway-helm \
+      --version v1.1.0 -n envoy-gateway-system --create-namespace
+
+
+================================================================================
+HOW CI/CD AUTO-DEPLOYS CHANGES
+================================================================================
+
+  DEV DEPLOYMENT FLOW:
+  ─────────────────────
+  1. Developer pushes code to the "develop" branch of a service repo
+  2. GitHub Actions CI pipeline triggers:
+       a. Runs code quality checks (SonarQube + Snyk)
+       b. Builds Docker image
+       c. Pushes image to Docker Hub
+       d. Updates image.tag in charts/<service>/values-dev.yaml
+       e. Commits and pushes to shopmesh-infra main branch
+  3. ArgoCD detects the change in the infra repo (polls every 3 min)
+  4. ArgoCD auto-syncs the affected child app
+  5. New pod rolls out in the "dev" namespace
+
+  PROD DEPLOYMENT FLOW:
+  ──────────────────────
+  1. Developer merges a PR to the "main" branch of a service repo
+  2. GitHub Actions CI pipeline triggers:
+       a. Runs build + Trivy security scan
+       b. Pushes image to Docker Hub with semantic version tag (v1.x.x)
+       c. Updates image.tag in charts/<service>/values-prod.yaml
+       d. Commits and pushes to shopmesh-infra main branch
+  3. ArgoCD detects the change
+  4. ArgoCD auto-syncs (selfHeal: true, prune: true)
+  5. New pod rolls out in the "prod" namespace
+
+
+================================================================================
+MANUAL SYNC (if auto-sync is disabled or stuck)
+================================================================================
+
+  Via CLI:
+    argocd app sync dev-auth-service
+    argocd app sync prod-auth-service
+
+  Via UI:
+    Open ArgoCD UI → Click the app → Click "SYNC" button
+
+  Sync all apps at once:
+    argocd app sync -l environment=dev
+    argocd app sync -l environment=prod
+
+
+================================================================================
+UPDATING IMAGE TAGS MANUALLY (without CI)
+================================================================================
+
+  If you want to manually deploy a new image version:
+
+  1. Edit the values file:
+       charts/<service>/values-dev.yaml   (for dev)
+       charts/<service>/values-prod.yaml  (for prod)
+
+  2. Change the tag field:
+       image:
+         tag: "your-new-tag-here"
+
+  3. Commit and push to main branch:
+       git add charts/<service>/values-dev.yaml
+       git commit -m "chore: update <service> dev image to <tag>"
+       git push origin main
+
+  4. ArgoCD will detect the change within 3 minutes and auto-sync.
+
+
+================================================================================
+TROUBLESHOOTING
+================================================================================
+
+  Problem: Application stuck in "OutOfSync" state
+  Solution:
+    argocd app sync <app-name> --force
+
+  Problem: Pod CrashLoopBackOff
+  Solution:
+    kubectl logs <pod-name> -n dev
+    kubectl describe pod <pod-name> -n dev
+
+  Problem: MongoDB PVC not binding (Pending state)
+  Solution:
+    - Check NFS server IP and path in values-dev.yaml / values-prod.yaml
+    - Verify NFS server is reachable from the cluster nodes
+    - Check StorageClass exists: kubectl get storageclass
+
+  Problem: ArgoCD cannot pull from GitHub repo
+  Solution:
+    - Verify repo credentials in ArgoCD Settings → Repositories
+    - Check if the PAT has "repo" scope
+    - Re-add the repo: argocd repo add <url> --username ... --password ...
+
+  Problem: App of Apps child apps not created
+  Solution:
+    - Check if root-app.yaml was applied: kubectl get app shopmesh-root-dev -n argocd
+    - Check ArgoCD has access to the infra repo
+    - Check if the AppProject exists: kubectl get appproject shopmesh-dev -n argocd
+    - Look at the parent app events: argocd app get shopmesh-root-dev
+
+  Problem: Helm chart error "no values file found: values-dev.yaml"
+  Solution:
+    - Ensure values-dev.yaml exists in charts/<service>/ directory
+    - Confirm it is committed and pushed to the main branch of shopmesh-infra
+
+  Problem: Namespace dev/prod not found
+  Solution:
+    kubectl create namespace dev
+    kubectl create namespace prod
+    # Or let ArgoCD create them with CreateNamespace=true (already configured)
+
+
+================================================================================
+QUICK REFERENCE — KEY FILES
+================================================================================
+
+  Bootstrap (apply once per env):
+    environments/dev/root-app.yaml       ← Dev parent app
+    environments/prod/root-app.yaml      ← Prod parent app
+
+  ArgoCD Projects:
+    argocd/projects/dev-project.yaml     ← Scopes dev apps to dev namespace
+    argocd/projects/prod-project.yaml    ← Scopes prod apps to prod namespace
+
+  Child App Definitions:
+    environments/dev/apps/<service>-app.yaml   ← 6 files (one per service)
+    environments/prod/apps/<service>-app.yaml  ← 6 files (one per service)
+
+  Values Files (CI updates image.tag here):
+    charts/<service>/values-dev.yaml     ← Dev configuration
+    charts/<service>/values-prod.yaml    ← Prod configuration
+
+  Helm Templates (chart logic):
+    charts/<service>/templates/
+      ├── deployment.yaml
+      ├── service.yaml
+      ├── configmap.yaml
+      ├── secret.yaml
+      └── networkpolicy.yaml
+
+
+================================================================================
+QUICK REFERENCE — USEFUL COMMANDS
+================================================================================
+
+  # See all ArgoCD apps and their status
+  kubectl get applications -n argocd
+
+  # Get details of a specific app
+  argocd app get dev-order-service
+
+  # Watch pod rollout in real time
+  kubectl rollout status deployment/order-service -n dev
+
+  # View logs of a running pod
+  kubectl logs -l app.kubernetes.io/name=order-service -n dev --tail=50
+
+  # Exec into a pod for debugging
+  kubectl exec -it deployment/order-service -n dev -- sh
+
+  # Check ArgoCD app events
+  kubectl describe application dev-order-service -n argocd
+
+  # Force ArgoCD to immediately re-check the repo (skip the 3-min poll)
+  argocd app refresh shopmesh-root-dev
+  argocd app refresh shopmesh-root-prod
+
+================================================================================

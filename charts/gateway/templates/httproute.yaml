@@ -1,0 +1,120 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# charts/gateway/templates/httproute.yaml
+#
+# Clean routing (NO rewrite):
+#   /api/auth     → auth-service
+#   /api/products → product-service
+#   /api/orders   → order-service
+#   /             → frontend
+# ──────────────────────────────────────────────────────────────────────────────
+{{- $global := .Values.global }}
+
+{{- if $global.gateway.enabled }}
+
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: shopmesh-httproute
+  namespace: {{ $global.namespace }}
+  labels:
+    app.kubernetes.io/name: shopmesh-httproute
+    app.kubernetes.io/part-of: {{ $global.partOf }}
+    app.kubernetes.io/component: gateway
+
+spec:
+  parentRefs:
+    - name: shopmesh-gateway
+      namespace: {{ $global.namespace }}
+
+  rules:
+    # ── AUTH SERVICE ─────────────────────────────────────────
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api/auth
+      backendRefs:
+        - name: auth-service
+          port: 3001
+
+    # ── PRODUCT SERVICE ──────────────────────────────────────
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api/products
+      backendRefs:
+        - name: product-service
+          port: 3002
+
+    # ── ORDER SERVICE ────────────────────────────────────────
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api/orders
+      backendRefs:
+        - name: order-service
+          port: 3003
+
+    # ── FRONTEND (CATCH-ALL — MUST BE LAST) ──────────────────
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: frontend
+          port: 80
+
+{{- else }}
+
+# ── FALLBACK: NGINX INGRESS ─────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: shopmesh-ingress
+  namespace: {{ $global.namespace }}
+  labels:
+    app.kubernetes.io/name: shopmesh-ingress
+    app.kubernetes.io/part-of: {{ $global.partOf }}
+    app.kubernetes.io/component: gateway
+  annotations:
+    {{- range $k, $v := $global.ingress.annotations }}
+    {{ $k }}: {{ $v | quote }}
+    {{- end }}
+
+spec:
+  ingressClassName: {{ $global.ingress.className }}
+  rules:
+    - http:
+        paths:
+          - path: /api/auth
+            pathType: Prefix
+            backend:
+              service:
+                name: auth-service
+                port:
+                  number: 3001
+
+          - path: /api/products
+            pathType: Prefix
+            backend:
+              service:
+                name: product-service
+                port:
+                  number: 3002
+
+          - path: /api/orders
+            pathType: Prefix
+            backend:
+              service:
+                name: order-service
+                port:
+                  number: 3003
+
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port:
+                  number: 80
+
+{{- end }}

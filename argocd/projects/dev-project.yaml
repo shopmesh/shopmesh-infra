@@ -1,11 +1,11 @@
 # =============================================================================
 # ArgoCD AppProject — DEV
 #
-# Scopes the dev Application strictly to:
-#   • Source: shopmesh-infra repo only (single-repo GitOps)
+# Scopes all dev child Applications to:
+#   • Source: shopmesh-infra (values) + helm-charts (charts) repos
 #   • Destination: dev namespace only
 #
-# All Kubernetes resource types used by the umbrella chart are whitelisted.
+# All Kubernetes resource types used by the per-service charts are whitelisted.
 # =============================================================================
 apiVersion: argoproj.io/v1alpha1
 kind: AppProject
@@ -17,9 +17,10 @@ metadata:
 spec:
   description: "ShopMesh — Development environment"
 
-  # Single repo — everything lives in shopmesh-infra
+  # Two repos: infra for values, helm-charts for chart templates
   sourceRepos:
     - https://github.com/shopmesh/shopmesh-infra.git
+    - https://github.com/shopmesh/helm-charts.git
 
   destinations:
     - server: https://kubernetes.default.svc

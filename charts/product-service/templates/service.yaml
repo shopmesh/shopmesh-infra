@@ -1,0 +1,24 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# charts/product-service/templates/service.yaml
+# Internal DNS: product-service.shopmesh.svc.cluster.local:3002
+# ──────────────────────────────────────────────────────────────────────────────
+{{- $vals := .Values }}
+{{- $global := .Values.global }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: product-service
+  namespace: {{ $global.namespace }}
+  labels:
+    app.kubernetes.io/name: product-service
+    app.kubernetes.io/part-of: {{ $global.partOf }}
+    app.kubernetes.io/component: backend
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: product-service
+  ports:
+    - name: http
+      protocol: TCP
+      port: {{ $vals.port }}
+      targetPort: {{ $vals.port }}

@@ -1,0 +1,34 @@
+# values-prod.yaml — gateway (PROD)
+# Not updated by CI — infrastructure config only.
+
+global:
+  namespace: prod
+  imagePullPolicy: Always
+  partOf: shopmesh
+  gateway:
+    enabled: true
+  ingress:
+    className: nginx
+    annotations:
+      nginx.ingress.kubernetes.io/use-regex: "true"
+
+gatewayClassName: envoy-gateway-class
+
+listener:
+  name: http
+  port: 80
+  protocol: HTTP
+
+routes:
+  - path: /api/auth
+    serviceName: auth-service
+    servicePort: 3001
+  - path: /api/products
+    serviceName: product-service
+    servicePort: 3002
+  - path: /api/orders
+    serviceName: order-service
+    servicePort: 3003
+  - path: /
+    serviceName: frontend
+    servicePort: 80

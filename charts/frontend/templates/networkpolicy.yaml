@@ -1,0 +1,101 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# charts/frontend/templates/networkpolicy.yaml
+#
+# Zero-trust NetworkPolicy for the frontend pod.
+#
+# INGRESS allowed:
+#   • From the Envoy Gateway data-plane namespace (envoy-gateway-system) so the
+#     Gateway controller can route external HTTP traffic to the frontend.
+#   • Port 80 only (nginx listener).
+#
+# EGRESS allowed:
+#   • kube-dns / CoreDNS on TCP+UDP 53 so the pod can resolve service names.
+#     (Without DNS, all service-to-service calls break silently.)
+#
+# Everything else is denied by the default-deny policy below.
+# ──────────────────────────────────────────────────────────────────────────────
+
+{{- $global := .Values.global }}
+
+# ── 1 of 2: Default-deny all ingress and egress for frontend pods ─────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: frontend-default-deny
+  namespace: {{ $global.namespace }}
+  labels:
+    app.kubernetes.io/name: frontend
+    app.kubernetes.io/part-of: {{ $global.partOf }}
+    app.kubernetes.io/component: network-policy
+spec:
+  # Target: every pod with this selector (matches the Deployment's pod template)
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: frontend
+  # Specifying both policyTypes with no rules = deny all ingress AND egress
+  policyTypes:
+    - Ingress
+    - Egress
+
+---
+# ── 2 of 2: Explicit allow policy for frontend ────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: frontend-allow
+  namespace: {{ $global.namespace }}
+  labels:
+    app.kubernetes.io/name: frontend
+    app.kubernetes.io/part-of: {{ $global.partOf }}
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: frontend
+  policyTypes:
+    - Ingress
+    - Egress
+
+  ingress:
+    # ── Allow traffic from the Envoy Gateway data-plane namespace ────────────
+    # The Envoy Gateway controller deploys proxy pods into its own namespace
+    # (typically "envoy-gateway-system"). We match by namespace label so we
+    # never need to hard-code a namespace name.
+    # If your cluster uses a different namespace for the gateway controller,
+    # add its label here or add a second namespaceSelector entry.
+    - from:
+        # Allow from the envoy-gateway controller namespace
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: envoy-gateway-system
+        # Also allow from any pod labelled as a gateway component in ANY
+        # namespace — this covers clusters that run the proxy in a custom ns.
+        - namespaceSelector:
+            matchLabels:
+              app.kubernetes.io/component: gateway
+        # Fallback: allow from within the same namespace so liveness/readiness
+        # probes from the kubelet (which travels through the node network, not
+        # pod network) are not blocked. kubelet probes are not subject to NP,
+        # but keeping this as documentation.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $global.namespace }}
+      ports:
+        # nginx listener — allow only port 80
+        - protocol: TCP
+          port: 80
+
+  egress:
+    # ── Allow DNS resolution (CoreDNS / kube-dns) ────────────────────────────
+    # Without this, all outgoing requests fail because the pod cannot resolve
+    # any service name. We target the kube-system namespace where CoreDNS runs.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+  
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53

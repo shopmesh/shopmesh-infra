@@ -1,12 +1,12 @@
 # =============================================================================
 # ArgoCD AppProject — PROD
 #
-# Scopes the prod Application strictly to:
-#   • Source: shopmesh-infra repo only (single-repo GitOps)
+# Scopes all prod child Applications to:
+#   • Source: shopmesh-infra (values) + helm-charts (charts) repos
 #   • Destination: prod namespace only
-#   • Manual sync only — no automation
+#   • Auto-sync ON with selfHeal and prune
 #
-# All Kubernetes resource types used by the umbrella chart are whitelisted.
+# All Kubernetes resource types used by the per-service charts are whitelisted.
 # =============================================================================
 apiVersion: argoproj.io/v1alpha1
 kind: AppProject
@@ -18,9 +18,10 @@ metadata:
 spec:
   description: "ShopMesh — Production environment"
 
-  # Single repo — everything lives in shopmesh-infra
+  # Two repos: infra for values, helm-charts for chart templates
   sourceRepos:
     - https://github.com/shopmesh/shopmesh-infra.git
+    - https://github.com/shopmesh/helm-charts.git
 
   destinations:
     - server: https://kubernetes.default.svc

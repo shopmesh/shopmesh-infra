@@ -1,0 +1,106 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# charts/auth-service/templates/networkpolicy.yaml
+#
+# Zero-trust NetworkPolicy for the auth-service pod.
+#
+# INGRESS allowed:
+#   • From the Envoy Gateway data-plane namespace — Gateway routes
+#     /api/auth/* to auth-service:3001.
+#   • From within the same namespace (shopmesh) — defensive rule so that
+#     any future intra-mesh calls between backend services are not silently
+#     blocked (e.g. product-service calling auth-service for JWT validation).
+#     This is safe because all other pods in the namespace are also protected
+#     by their own default-deny policies.
+#
+# EGRESS allowed:
+#   • kube-dns / CoreDNS on TCP+UDP 53
+#   • mongodb on port 27017 — auth-service stores user accounts in MongoDB
+#     (MONGO_URI and MONGO_HOST are set in its Secret and ConfigMap)
+#
+# Everything else is denied by the default-deny policy below.
+# ──────────────────────────────────────────────────────────────────────────────
+
+{{- $global := .Values.global }}
+{{- $vals   := .Values }}
+
+# ── 1 of 2: Default-deny all ingress and egress for auth-service pods ─────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: auth-service-default-deny
+  namespace: {{ $global.namespace }}
+  labels:
+    app.kubernetes.io/name: auth-service
+    app.kubernetes.io/part-of: {{ $global.partOf }}
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: auth-service
+  policyTypes:
+    - Ingress
+    - Egress
+
+---
+# ── 2 of 2: Explicit allow policy for auth-service ────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: auth-service-allow
+  namespace: {{ $global.namespace }}
+  labels:
+    app.kubernetes.io/name: auth-service
+    app.kubernetes.io/part-of: {{ $global.partOf }}
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: auth-service
+  policyTypes:
+    - Ingress
+    - Egress
+
+  ingress:
+    # ── Allow from Envoy Gateway data-plane (routes /api/auth/* here) ────────
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: envoy-gateway-system
+        # Cover gateway controller pods in any namespace labelled "gateway"
+        - namespaceSelector:
+            matchLabels:
+              app.kubernetes.io/component: gateway
+        # Allow from same namespace — handles intra-namespace backend calls
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $global.namespace }}
+      ports:
+        # auth-service HTTP listener
+        - protocol: TCP
+          port: {{ $vals.port }}
+
+  egress:
+    # ── Allow DNS resolution ──────────────────────────────────────────────────
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+    # ── Allow egress to MongoDB (auth-service stores user data there) ─────────
+    # Selector matches the pod label on the mongodb StatefulSet pod template.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $global.namespace }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: mongodb
+      ports:
+        # MongoDB wire protocol
+        - protocol: TCP
+          port: 27017

@@ -1,0 +1,48 @@
+# values-prod.yaml — frontend (PROD)
+# CI updates image.tag on every main branch push.
+
+global:
+  namespace: prod
+  imagePullPolicy: Always
+  partOf: shopmesh
+  gateway:
+    enabled: true
+  ingress:
+    className: nginx
+    annotations:
+      nginx.ingress.kubernetes.io/use-regex: "true"
+
+image:
+  repository: priyatham753/frontend
+  tag: "v1.0.0"                  # <-- CI updates this (semantic version)
+
+replicaCount: 2
+port: 80
+
+resources:
+  requests:
+    cpu: "100m"
+    memory: "128Mi"
+  limits:
+    cpu: "200m"
+    memory: "256Mi"
+
+env:
+  REACT_APP_AUTH_SERVICE_URL: "/api/auth"
+  REACT_APP_PRODUCT_SERVICE_URL: "/api/products"
+  REACT_APP_ORDER_SERVICE_URL: "/api/orders"
+  NGINX_PORT: "80"
+
+probes:
+  liveness:
+    path: /
+    initialDelaySeconds: 15
+    periodSeconds: 20
+    timeoutSeconds: 5
+    failureThreshold: 3
+  readiness:
+    path: /
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3

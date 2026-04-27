@@ -1,0 +1,53 @@
+# values-dev.yaml — product-service (DEV)
+# CI updates image.tag on every develop branch push.
+
+global:
+  namespace: dev
+  imagePullPolicy: Always
+  partOf: shopmesh
+  gateway:
+    enabled: true
+  ingress:
+    className: nginx
+    annotations:
+      nginx.ingress.kubernetes.io/use-regex: "true"
+
+image:
+  repository: priyatham753/product-service
+  tag: "dev-latest"              # <-- CI updates this
+
+replicaCount: 1
+port: 3002
+
+resources:
+  requests:
+    cpu: "100m"
+    memory: "128Mi"
+  limits:
+    cpu: "300m"
+    memory: "256Mi"
+
+env:
+  PORT: "3002"
+  NODE_ENV: "development"
+  AUTH_SERVICE_URL: "http://auth-service.dev.svc.cluster.local:3001"
+  MONGO_HOST: "mongodb-0.mongodb-headless.dev.svc.cluster.local"
+  MONGO_PORT: "27017"
+  MONGO_DB: "productdb"
+
+secrets:
+  MONGO_URI: bW9uZ29kYjovL2FkbWluOmRldi1wYXNzd29yZEBtb25nb2RiLTAubW9uZ29kYi1oZWFkbGVzcy5kZXYuc3ZjLmNsdXN0ZXIubG9jYWw6MjcwMTcvcHJvZHVjdGRiP2F1dGhTb3VyY2U9YWRtaW4=
+
+probes:
+  liveness:
+    path: /health
+    initialDelaySeconds: 30
+    periodSeconds: 20
+    timeoutSeconds: 5
+    failureThreshold: 3
+  readiness:
+    path: /health
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3

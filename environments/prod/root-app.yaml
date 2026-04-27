@@ -1,0 +1,37 @@
+# =============================================================================
+# PROD Parent — Root Application
+#
+# Apply ONCE per environment to bootstrap:
+#   kubectl apply -f environments/prod/root-app.yaml
+#
+# Watches environments/prod/apps/ and auto-creates one child
+# Application per service into the argocd namespace.
+# selfHeal: true | prune: true | auto-sync: ON
+# =============================================================================
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: shopmesh-root-prod
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: shopmesh-prod
+
+  source:
+    repoURL: https://github.com/shopmesh/shopmesh-infra.git
+    targetRevision: main
+    path: environments/prod/apps
+    directory:
+      recurse: true
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

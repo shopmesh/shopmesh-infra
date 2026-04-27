@@ -1,0 +1,131 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# charts/order-service/templates/networkpolicy.yaml
+#
+# Zero-trust NetworkPolicy for the order-service pod.
+#
+# INGRESS allowed:
+#   • From the Envoy Gateway data-plane namespace — Gateway routes
+#     /api/orders/* to order-service:3003.
+#   • From within the same namespace (shopmesh) — covers intra-namespace calls.
+#
+# EGRESS allowed:
+#   • kube-dns / CoreDNS on TCP+UDP 53
+#   • mongodb on port 27017 — order-service stores orders in MongoDB
+#     (MONGO_URI is set in its Secret; MONGO_HOST in its ConfigMap)
+#   • auth-service on port 3001 — order-service validates JWT tokens by calling
+#     auth-service (AUTH_SERVICE_URL is set in its ConfigMap)
+#   • product-service on port 3002 — order-service validates product IDs
+#     (PRODUCT_SERVICE_URL is set in its ConfigMap)
+#
+# Everything else is denied by the default-deny policy below.
+# ──────────────────────────────────────────────────────────────────────────────
+
+{{- $global := .Values.global }}
+{{- $vals   := .Values }}
+
+# ── 1 of 2: Default-deny all ingress and egress for order-service pods ─────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: order-service-default-deny
+  namespace: {{ $global.namespace }}
+  labels:
+    app.kubernetes.io/name: order-service
+    app.kubernetes.io/part-of: {{ $global.partOf }}
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: order-service
+  policyTypes:
+    - Ingress
+    - Egress
+
+---
+# ── 2 of 2: Explicit allow policy for order-service ────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: order-service-allow
+  namespace: {{ $global.namespace }}
+  labels:
+    app.kubernetes.io/name: order-service
+    app.kubernetes.io/part-of: {{ $global.partOf }}
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: order-service
+  policyTypes:
+    - Ingress
+    - Egress
+
+  ingress:
+    # ── Allow from Envoy Gateway data-plane (routes /api/orders/* here) ───────
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: envoy-gateway-system
+        # Cover gateway controller pods in any namespace labelled "gateway"
+        - namespaceSelector:
+            matchLabels:
+              app.kubernetes.io/component: gateway
+        # Allow from same namespace — handles intra-namespace backend calls
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $global.namespace }}
+      ports:
+        # order-service HTTP listener
+        - protocol: TCP
+          port: {{ $vals.port }}
+
+  egress:
+    # ── Allow DNS resolution ──────────────────────────────────────────────────
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+    # ── Allow egress to MongoDB (order-service stores orders there) ───────────
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $global.namespace }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: mongodb
+      ports:
+        - protocol: TCP
+          port: 27017
+
+    # ── Allow egress to auth-service (JWT validation) ─────────────────────────
+    # AUTH_SERVICE_URL = http://auth-service.shopmesh.svc.cluster.local:3001
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $global.namespace }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: auth-service
+      ports:
+        - protocol: TCP
+          port: 3001
+
+    # ── Allow egress to product-service (product ID validation) ───────────────
+    # PRODUCT_SERVICE_URL = http://product-service.shopmesh.svc.cluster.local:3002
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $global.namespace }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: product-service
+      ports:
+        - protocol: TCP
+          port: 3002
