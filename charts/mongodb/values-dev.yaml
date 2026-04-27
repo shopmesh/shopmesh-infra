@@ -28,13 +28,13 @@ resources:
     memory: "1Gi"
 
 storage:
-  storageClassName: nfs-storage-dev
+  storageClassName: nfs-storage
   size: 5Gi
   accessMode: ReadWriteMany
 
 nfs:
   server: "172.31.24.10"           # <-- Replace with your NFS server IP
-  path: "/exports/mongodb-dev"
+  path: "/exports/mongodb"
 
 secrets:
   MONGO_ROOT_USERNAME: YWRtaW4=
