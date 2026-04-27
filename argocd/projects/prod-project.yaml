@@ -18,10 +18,8 @@ metadata:
 spec:
   description: "ShopMesh — Production environment"
 
-  # Two repos: infra for values, helm-charts for chart templates
   sourceRepos:
     - https://github.com/shopmesh/shopmesh-infra.git
-    - https://github.com/shopmesh/helm-charts.git
 
   destinations:
     - server: https://kubernetes.default.svc
