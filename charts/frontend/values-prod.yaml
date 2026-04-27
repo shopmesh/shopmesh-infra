@@ -11,14 +11,11 @@ global:
     className: nginx
     annotations:
       nginx.ingress.kubernetes.io/use-regex: "true"
-
 image:
   repository: priyatham753/frontend
-  tag: "v1.0.0"                  # <-- CI updates this (semantic version)
-
+  tag: "v0.0.1" # <-- CI updates this (semantic version)
 replicaCount: 2
 port: 80
-
 resources:
   requests:
     cpu: "100m"
@@ -26,13 +23,11 @@ resources:
   limits:
     cpu: "200m"
     memory: "256Mi"
-
 env:
   REACT_APP_AUTH_SERVICE_URL: "/api/auth"
   REACT_APP_PRODUCT_SERVICE_URL: "/api/products"
   REACT_APP_ORDER_SERVICE_URL: "/api/orders"
   NGINX_PORT: "80"
-
 probes:
   liveness:
     path: /

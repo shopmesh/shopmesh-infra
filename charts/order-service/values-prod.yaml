@@ -11,14 +11,11 @@ global:
     className: nginx
     annotations:
       nginx.ingress.kubernetes.io/use-regex: "true"
-
 image:
   repository: priyatham753/order-service
-  tag: "v1.0.0"                  # <-- CI updates this (semantic version)
-
+  tag: "v0.0.3" # <-- CI updates this (semantic version)
 replicaCount: 2
 port: 3003
-
 resources:
   requests:
     cpu: "200m"
@@ -26,7 +23,6 @@ resources:
   limits:
     cpu: "500m"
     memory: "512Mi"
-
 env:
   PORT: "3003"
   NODE_ENV: "production"
@@ -35,10 +31,8 @@ env:
   PRODUCT_SERVICE_URL: "http://product-service.prod.svc.cluster.local:3002"
   MONGO_HOST: "mongodb-0.mongodb-headless.prod.svc.cluster.local"
   MONGO_PORT: "27017"
-
 secrets:
   MONGO_URI: bW9uZ29kYjovL2FkbWluOnNob3BtZXNoLWRiLXBhc3N3b3JkLTIwMjRAbW9uZ29kYi0wLm1vbmdvZGItaGVhZGxlc3MucHJvZC5zdmMuY2x1c3Rlci5sb2NhbDoyNzAxNw==
-
 probes:
   liveness:
     path: /health
