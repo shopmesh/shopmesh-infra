@@ -68,4 +68,4 @@ spec:
       kind: HTTPRoute
 
   orphanedResources:
-    warn: true
+    warn: false
