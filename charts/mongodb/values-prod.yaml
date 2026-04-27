@@ -28,7 +28,7 @@ resources:
     memory: "2Gi"
 
 storage:
-  storageClassName: nfs-storage
+  storageClassName: nfs-client
   size: 50Gi
   accessMode: ReadWriteMany
 
