@@ -39,11 +39,11 @@ spec:
       kind: PersistentVolume
     - group: "gateway.networking.k8s.io"
       kind: GatewayClass
-    - group: "argoproj.io"
-      kind: Application
 
   # ── Namespace-scoped resources created by the chart ─────────────────────────
   namespaceResourceWhitelist:
+    - group: "argoproj.io"
+      kind: Application
     - group: "apps"
       kind: Deployment
     - group: "apps"
