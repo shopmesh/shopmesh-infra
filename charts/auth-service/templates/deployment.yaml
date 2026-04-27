@@ -81,6 +81,15 @@ spec:
             timeoutSeconds: {{ $vals.probes.liveness.timeoutSeconds }}
             failureThreshold: {{ $vals.probes.liveness.failureThreshold }}
 
+          startupProbe:
+            httpGet:
+              path: {{ $vals.probes.liveness.path }}
+              port: {{ $vals.port }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 15
+
           readinessProbe:
             httpGet:
               path: {{ $vals.probes.readiness.path }}
